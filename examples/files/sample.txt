@@ -1,0 +1,17 @@
+SubscriptionBridge — Project Summary
+
+SubscriptionBridge is a local personal agent runtime that turns browser-based
+consumer LLM subscriptions (Gemini, ChatGPT, Claude) into agent-capable inference
+backends.
+
+The core idea is that the browser LLM is NOT the agent. The local runtime is the
+agent, and the browser UI is only a provider/inference backend.
+
+Key Features:
+- Agent runtime with tool execution loop
+- Codebase memory indexing and semantic/ keyword search
+- Gem file prompting (upload files to Gemini)
+- Browser automation via Playwright (managed or CDP mode)
+- Local FastAPI server
+- Structured logging with secret redaction
+- Path traversal protection, dangerous command blocking, sensitive file detection

@@ -1,0 +1,48 @@
+# Provider Configuration
+providers:
+  fake:
+    enabled: true
+    capabilities:
+      - text_chat
+      - code_reasoning
+    default_model: fake-default
+    priority: 0
+
+  gemini:
+    enabled: true
+    capabilities:
+      - text_chat
+      - code_reasoning
+      - image_generation
+      - file_upload
+      - vision
+    default_model: "2.0 Flash"
+    url: "https://gemini.google.com/app"
+    priority: 10
+
+  chatgpt:
+    enabled: false
+    capabilities:
+      - text_chat
+      - code_reasoning
+    default_model: "GPT-4"
+    url: "https://chat.openai.com"
+    priority: 20
+
+  claude:
+    enabled: false
+    capabilities:
+      - text_chat
+      - code_reasoning
+      - file_upload
+    default_model: "Claude 3.5 Sonnet"
+    url: "https://claude.ai"
+    priority: 30
+
+routing:
+  default_provider: fake
+  rules:
+    - task_pattern: "image_generation|generate_image|create_image"
+      provider: gemini
+    - task_pattern: "architecture|design|planning|design_doc"
+      provider: claude

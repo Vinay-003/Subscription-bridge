@@ -1,0 +1,8 @@
+Review the following code and provide feedback on:
+1. Potential bugs or edge cases
+2. Code style and readability
+3. Performance considerations
+4. Security concerns
+5. Suggestions for improvement
+
+Focus on practical, actionable feedback rather than theoretical issues.

@@ -1,0 +1,45 @@
+# Claude Web UI Selectors
+provider: claude
+url: "https://claude.ai"
+
+selectors:
+  composer:
+    - "textarea[aria-label*='message']"
+    - "textarea"
+    - "div[contenteditable='true'][role='textbox']"
+
+  new_chat_buttons:
+    - "button[aria-label*='New chat']"
+    - "a[href='/chat']"
+
+  model_response:
+    - ".message-assistant"
+    - ".prose"
+    - ".font-claude-message"
+
+  progress_indicators:
+    - ".thinking"
+    - "[role='status']"
+    - ".typing"
+
+  send_buttons:
+    - "button[aria-label*='Send']"
+    - "button[type='submit']"
+
+  file_input:
+    - "input[type='file']"
+
+unsafe_click_words:
+  - "share"
+  - "delete"
+  - "settings"
+  - "help"
+  - "upgrade"
+  - "logout"
+  - "plan"
+
+timeouts:
+  default: 30000
+  composer: 30000
+  navigation: 60000
+  send_confirm: 35000

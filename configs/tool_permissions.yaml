@@ -1,0 +1,74 @@
+# Tool Permissions Configuration
+# Defines which tools are available, their allow/deny lists, and timeout limits.
+
+file_read:
+  enabled: true
+  allow_paths: ["."]
+  deny_paths:
+    - ".env"
+    - ".env.*"
+    - "**/credentials*"
+    - "**/secret*"
+    - "**/token*"
+    - "**/*.pem"
+    - "**/*.key"
+  max_size_bytes: 1_048_576
+
+file_write:
+  enabled: true
+  allow_paths: ["."]
+  deny_paths:
+    - ".env"
+    - ".env.*"
+    - "**/credentials*"
+    - "**/secret*"
+    - "**/token*"
+  max_size_bytes: 1_048_576
+
+grep:
+  enabled: true
+  allow_paths: ["."]
+  deny_paths: []
+  timeout_seconds: 30
+
+bash:
+  enabled: true
+  timeout_seconds: 120
+  deny_commands:
+    - "rm -rf /"
+    - "rm -rf /*"
+    - "mkfs"
+    - "dd if="
+    - ":(){ :|:& };:"
+    - "shutdown"
+    - "reboot"
+    - "poweroff"
+    - "chmod 777"
+    - "chown"
+    - "wget *--password*"
+    - "curl *--user*"
+    - "mv * /dev/null"
+    - "> /dev/sda"
+    - "fdisk"
+    - "parted"
+    - "mkswap"
+    - "swapon"
+    - "export *="
+    - "alias *="
+  deny_patterns:
+    - "rm\\s+-rf\\s+/"
+    - "sudo"
+    - "passwd"
+    - ">\\s*/dev/"
+
+git_diff:
+  enabled: true
+  timeout_seconds: 30
+
+patch:
+  enabled: true
+  timeout_seconds: 60
+
+codebase_search:
+  enabled: true
+  timeout_seconds: 30

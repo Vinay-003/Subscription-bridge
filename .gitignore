@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project
+.subscription_bridge/
+logs/
+outputs/
+*.log
+
+# Environment
+.env
+.env.local
+
+# Browser profiles
+chrome-profile/
+
+# Test artifacts
+test-results/
+playwright-report/
+screenshots/
+traces/

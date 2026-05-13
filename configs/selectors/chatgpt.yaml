@@ -1,0 +1,44 @@
+# ChatGPT Web UI Selectors
+provider: chatgpt
+url: "https://chat.openai.com"
+
+selectors:
+  composer:
+    - "textarea[aria-label*='message']"
+    - "textarea"
+    - "div[contenteditable='true']"
+
+  new_chat_buttons:
+    - "button[aria-label*='New chat']"
+    - "a[href='/']"
+
+  model_response:
+    - "[data-message-author-role='assistant']"
+    - ".markdown"
+    - ".prose"
+
+  progress_indicators:
+    - "[role='status']"
+    - ".typing-indicator"
+    - ".thinking"
+
+  send_buttons:
+    - "button[data-testid='send-button']"
+
+  file_input:
+    - "input[type='file']"
+
+unsafe_click_words:
+  - "share"
+  - "delete"
+  - "rename"
+  - "settings"
+  - "help"
+  - "upgrade"
+  - "logout"
+
+timeouts:
+  default: 30000
+  composer: 30000
+  navigation: 60000
+  send_confirm: 35000

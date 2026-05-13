@@ -1,0 +1,9 @@
+Analyze the architectural design of the attached project and provide:
+
+1. Overall architecture assessment
+2. Strengths of the current design
+3. Potential weaknesses or risks
+4. Suggested improvements
+5. How the design could scale to more providers
+
+Be specific and reference actual components where possible.

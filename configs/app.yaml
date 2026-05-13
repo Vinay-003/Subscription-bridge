@@ -1,0 +1,53 @@
+# SubscriptionBridge Application Configuration
+app:
+  name: SubscriptionBridge
+  version: "0.1.0"
+  description: "A local personal agent runtime for browser-based LLMs"
+
+  data_dir: ~/.subscription-bridge
+  log_dir: ~/.subscription-bridge/logs
+  index_dir: ~/.subscription-bridge/index
+
+  default_provider: fake
+  max_steps: 25
+  default_timeout_seconds: 300
+
+browser:
+  mode: managed
+  cdp_url: "http://127.0.0.1:9333"
+  headless: false
+  user_data_dir: "~/.subscription-bridge/chrome-profile"
+  downloads_dir: "~/.subscription-bridge/downloads"
+  debug_dir: "~/.subscription-bridge/debug"
+  max_sessions: 3
+  session_ttl_seconds: 600
+  download_timeout_seconds: 180
+
+logging:
+  level: INFO
+  format: console
+
+memory:
+  index_dir_name: ".subscription_bridge/index"
+  embedding_provider: "hash"
+  embedding_dim: 384
+  chunk_max_lines: 160
+  chunk_overlap_lines: 20
+  max_file_bytes: 500000
+
+gemini:
+  uploads:
+    enabled: true
+    max_files: 10
+    max_file_bytes: 25000000
+    upload_timeout_seconds: 180
+    allow_unknown_extensions: true
+    block_archives: false
+    block_empty_files: false
+    block_hidden_files: false
+    block_sensitive_files: true
+    allow_paths_outside_workspace: true
+
+api:
+  host: 127.0.0.1
+  port: 8742

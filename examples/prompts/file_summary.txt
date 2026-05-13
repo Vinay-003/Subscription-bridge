@@ -1,0 +1,12 @@
+Summarize the attached file in the following format:
+
+Title: <brief title>
+Type: <document type>
+Length: <page count or word count if detectable>
+
+Key Points:
+- point 1
+- point 2
+- point 3
+
+Main Takeaway: <one sentence summary>

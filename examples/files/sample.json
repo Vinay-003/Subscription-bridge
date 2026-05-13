@@ -1,0 +1,26 @@
+{
+  "project": "SubscriptionBridge",
+  "version": "0.1.0",
+  "architecture": {
+    "layers": [
+      "CLI / API",
+      "Agent Runtime",
+      "Context Builder",
+      "Provider Layer",
+      "Browser Runtime",
+      "Tools and Memory"
+    ],
+    "flow": "User -> CLI/API -> AgentRuntime -> ProviderAdapter -> BrowserSession -> Web LLM"
+  },
+  "providers": [
+    {
+      "name": "fake",
+      "capabilities": ["text_chat", "code_reasoning"]
+    },
+    {
+      "name": "gemini",
+      "capabilities": ["text_chat", "code_reasoning", "file_upload", "vision"]
+    }
+  ],
+  "status": "Phase 8 — Documentation and Polish"
+}

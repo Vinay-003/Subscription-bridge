@@ -1,0 +1,112 @@
+# Gemini Web UI Selectors
+# Centralized selector definitions for the Gemini provider.
+# All browser interactions should reference these selectors only.
+
+provider: gemini
+url: "https://gemini.google.com/app"
+
+selectors:
+  composer:
+    - "rich-textarea div[contenteditable='true']"
+    - "div[contenteditable='true'][role='textbox']"
+    - "main div[contenteditable='true']"
+    - "textarea[aria-label*='message']"
+    - "textarea"
+
+  new_chat_buttons:
+    - "button[aria-label='New chat']"
+    - "a[href='/app']"
+
+  response:
+    - "model-response"
+    - ".model-response"
+    - "[data-response-index]"
+    - ".response-container"
+    - "[data-testid*='response']"
+    - "[class*='response']"
+
+  progress:
+    - "[role='progressbar']"
+    - "mat-progress-spinner"
+    - "mat-progress-bar"
+    - "[aria-label*='thinking']"
+    - ".spinner"
+    - ".loading"
+
+  buttons:
+    send:
+      - "button[aria-label*='Send']"
+      - "button[aria-label*='Send message']"
+      - "button[type='submit']"
+    new_chat:
+      - "button[aria-label='New chat']"
+      - "a[href='/app']"
+
+  login_indicators:
+    - "[data-test-id*='avatar']"
+    - "img[alt*='profile']"
+    - "button[aria-label*='account']"
+
+  upload_inputs:
+    - "input[type='file'][multiple]"
+    - "input[type='file']"
+
+  attach_buttons:
+    - "button[aria-label*='Add files']"
+    - "button[aria-label*='Attach']"
+    - "button[aria-label*='Upload']"
+    - "[role='button'][aria-label*='Add files']"
+    - "[role='button'][aria-label*='Attach']"
+
+  attachment_previews:
+    - "[data-testid*='attachment']"
+    - "[class*='attachment']"
+    - "[class*='file']"
+    - "main img"
+
+  file_input:
+    - "input[type='file']"
+    - "input[accept*='image']"
+
+  image_viewer:
+    - "[role='dialog'] img"
+    - ".image-viewer img"
+
+  download_buttons:
+    - "button[aria-label*='Download']"
+    - "button[aria-label*='download']"
+    - "a[download]"
+
+  upload_thumbnails:
+    - "[data-test-id*='attachment']"
+    - ".attachment-thumbnail"
+    - "img[alt*='attachment']"
+
+  model_toggle:
+    - "button[aria-label*='model']"
+    - "button[aria-label*='Model']"
+    - "[role='tablist'] button"
+
+unsafe_click_words:
+  - "share conversation"
+  - "share"
+  - "rename"
+  - "delete"
+  - "remove"
+  - "archive"
+  - "more options"
+  - "recent"
+  - "activity"
+  - "settings"
+  - "help"
+  - "temporary chat"
+  - "new chat"
+
+timeouts:
+  default: 30000
+  composer: 30000
+  navigation: 60000
+  send_confirm: 35000
+  paste_verify: 35000
+  generation: 300000
+  download: 180000
