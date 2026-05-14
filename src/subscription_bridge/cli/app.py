@@ -368,9 +368,10 @@ async def _ensure_browser_async() -> PlaywrightManager:
 
 
 async def _ensure_gemini_provider_async() -> GeminiProviderAdapter:
+    from typing import cast as _cast
     registry = _get_registry()
     if "gemini" in registry:
-        existing = registry.get("gemini")
+        existing = _cast(GeminiProviderAdapter, registry.get("gemini"))
         return existing
 
     pm = await _ensure_browser_async()

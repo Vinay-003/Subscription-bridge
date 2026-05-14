@@ -30,6 +30,7 @@ class TabSession:
         self.last_used_at: float = self.created_at
         self.state: SessionState = SessionState.IDLE
         self.current_run_id: str | None = None
+        self.has_active_conversation: bool = False
 
     @property
     def page(self) -> Any:

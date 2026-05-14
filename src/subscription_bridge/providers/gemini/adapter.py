@@ -56,18 +56,23 @@ class GeminiProviderAdapter(ProviderAdapter):
 
         try:
             session = await self._pool.acquire("gemini", request.run_id, self._page_factory)
-            await self._ensure_fresh_chat(session)
 
-            if request.attachments:
-                upload_meta = await self._handle_attachments(session, request.attachments, start)
-                if upload_meta.get("upload_method") == "text_inline":
-                    preamble_parts = []
-                    for i, fname in enumerate(upload_meta.get("inline_text_attachments", [])):
-                        content = upload_meta.get("inline_text_contents", [{}])[i].get("content", "")
-                        if content:
-                            preamble_parts.append(f"[File: {fname}]\n```\n{content}\n```")
-                    if preamble_parts:
-                        prompt = "\n\n".join(preamble_parts) + "\n\n" + prompt
+            is_continuation = session.has_active_conversation
+
+            if not is_continuation:
+                await self._ensure_fresh_chat(session)
+                if request.attachments:
+                    upload_meta = await self._handle_attachments(session, request.attachments, start)
+                    if upload_meta.get("upload_method") == "text_inline":
+                        preamble_parts = []
+                        for i, fname in enumerate(upload_meta.get("inline_text_attachments", [])):
+                            content = upload_meta.get("inline_text_contents", [{}])[i].get("content", "")
+                            if content:
+                                preamble_parts.append(f"[File: {fname}]\n```\n{content}\n```")
+                        if preamble_parts:
+                            prompt = "\n\n".join(preamble_parts) + "\n\n" + prompt
+            else:
+                upload_meta = {}
 
             if request.require_json and not any(marker in prompt for marker in ["STRICT JSON", "Return STRICT JSON"]):
                 prompt += "\n\nYou MUST return STRICT JSON only. No Markdown. No prose outside JSON."
@@ -114,6 +119,8 @@ class GeminiProviderAdapter(ProviderAdapter):
                     error="Gemini returned empty response",
                     metadata=upload_meta or {},
                 )
+
+            session.has_active_conversation = True
 
             return ProviderResponse(
                 provider=self.name, text=text, raw_text=text, success=True,

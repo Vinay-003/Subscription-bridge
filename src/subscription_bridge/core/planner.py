@@ -127,6 +127,13 @@ class Planner:
         self._tools = tools
 
     def build_prompt(self, state: AgentState) -> str:
+        is_continuation = state.steps > 0
+        if is_continuation:
+            ctx = build_observation_context(state)
+            if ctx:
+                return ctx + "\n\nWhat is the next action? Return STRICT JSON."
+            return "What is the next action? Return STRICT JSON."
+
         system = build_system_prompt(self._tools)
         user = build_user_prompt(state)
         separator = "\n---\n"
