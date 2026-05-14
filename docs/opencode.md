@@ -36,16 +36,19 @@ Add the following to your OpenCode configuration (e.g., `~/.config/opencode/open
           "limit": { "context": 32000, "output": 8192 }
         },
         "subscription-bridge-gemini-fast": {
-          "name": "Gemini 2.0 Flash",
-          "limit": { "context": 100000, "output": 8192 }
+          "name": "Gemini 3 Flash",
+          "limit": { "context": 1000000, "output": 8192 },
+          "modalities": { "input": ["text", "image"], "output": ["text"] }
         },
         "subscription-bridge-gemini-thinking": {
-          "name": "Gemini 2.5 Pro (thinking)",
-          "limit": { "context": 500000, "output": 65536 }
+          "name": "Gemini 3 Deep Think",
+          "limit": { "context": 192000, "output": 65536 },
+          "modalities": { "input": ["text", "image"], "output": ["text"] }
         },
         "subscription-bridge-gemini-pro": {
-          "name": "Gemini 2.5 Pro",
-          "limit": { "context": 900000, "output": 65536 }
+          "name": "Gemini 3.1 Pro",
+          "limit": { "context": 1000000, "output": 65536 },
+          "modalities": { "input": ["text", "image"], "output": ["text"] }
         }
       }
     }
@@ -124,9 +127,9 @@ google-chrome \
 | Model ID | Gemini Variant | Context | Chrome Required |
 |----------|---------------|---------|-----------------|
 | `subscription-bridge-fake` | Deterministic test | 32K | No |
-| `subscription-bridge-gemini-fast` | 2.0 Flash | 100K | Yes |
-| `subscription-bridge-gemini-thinking` | 2.5 Pro (thinking) | 500K | Yes |
-| `subscription-bridge-gemini-pro` | 2.5 Pro | 900K | Yes |
+| `subscription-bridge-gemini-fast` | Gemini 3 Flash | 1M | Yes |
+| `subscription-bridge-gemini-thinking` | Gemini 3 Deep Think | 192K | Yes |
+| `subscription-bridge-gemini-pro` | Gemini 3.1 Pro | 1M | Yes |
 
 ---
 

@@ -54,6 +54,7 @@ class AgentState:
         self.final_answer: str = ""
         self.error: str = ""
         self.clarification_question: str = ""
+        self.auto_file_context: str = ""
 
     def start(self) -> None:
         self.status = AgentStatus.RUNNING

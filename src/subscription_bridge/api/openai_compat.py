@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import importlib
 import json
+import os
+import re
+import tempfile
 import time
 import uuid
 from collections.abc import AsyncGenerator
 from typing import Any
 
+import httpx
 from fastapi import APIRouter, Request
 from starlette.responses import JSONResponse, StreamingResponse
 
@@ -22,7 +27,6 @@ from subscription_bridge.api.openai_models import (
     ModelList,
     OpenAIModel,
     ResponseMessage,
-    ToolCall,
     Usage,
 )
 from subscription_bridge.providers.base import ProviderRequest
@@ -38,9 +42,9 @@ GEMINI_MODELS = {MODEL_GEMINI_FAST, MODEL_GEMINI_THINKING, MODEL_GEMINI_PRO}
 
 MODEL_CONTEXT_LIMITS: dict[str, int] = {
     MODEL_FAKE: 32000,
-    MODEL_GEMINI_FAST: 100000,
-    MODEL_GEMINI_THINKING: 500000,
-    MODEL_GEMINI_PRO: 900000,
+    MODEL_GEMINI_FAST: 1_000_000,
+    MODEL_GEMINI_THINKING: 192_000,
+    MODEL_GEMINI_PRO: 1_000_000,
 }
 
 MODEL_OUTPUT_LIMITS: dict[str, int] = {
@@ -89,10 +93,17 @@ def _estimate_tokens(text: str) -> int:
     return len(text) // 4 + 1
 
 
+def _strip_provider_prefix(model_id: str) -> str:
+    if "/" in model_id:
+        return model_id.split("/", 1)[1]
+    return model_id
+
+
 def _check_context_limit(req: ChatCompletionRequest) -> JSONResponse | None:
-    if req.model not in MODEL_CONTEXT_LIMITS:
+    model = _strip_provider_prefix(req.model)
+    if model not in MODEL_CONTEXT_LIMITS:
         return None
-    context_limit = MODEL_CONTEXT_LIMITS[req.model]
+    context_limit = MODEL_CONTEXT_LIMITS[model]
 
     total_text = ""
     for msg in req.messages:
@@ -119,17 +130,18 @@ def _check_context_limit(req: ChatCompletionRequest) -> JSONResponse | None:
 
 def _gemini_model_variant(model_id: str) -> str:
     mapping = {
-        MODEL_GEMINI_FAST: "2.0 Flash",
-        MODEL_GEMINI_THINKING: "2.5 Pro (thinking)",
-        MODEL_GEMINI_PRO: "2.5 Pro",
+        MODEL_GEMINI_FAST: "Gemini 3 Flash",
+        MODEL_GEMINI_THINKING: "Gemini 3 Deep Think",
+        MODEL_GEMINI_PRO: "Gemini 3.1 Pro",
     }
-    return mapping.get(model_id, "2.0 Flash")
+    return mapping.get(_strip_provider_prefix(model_id), "Gemini 3 Flash")
 
 
 async def _resolve_adapter(model_id: str, deps: AppDependencies) -> Any | None:
-    if model_id == MODEL_FAKE:
+    model = _strip_provider_prefix(model_id)
+    if model == MODEL_FAKE:
         return deps.get_registry().get("fake")
-    if model_id in GEMINI_MODELS:
+    if model in GEMINI_MODELS:
         try:
             return await deps.get_gemini_adapter()
         except Exception:
@@ -139,14 +151,39 @@ async def _resolve_adapter(model_id: str, deps: AppDependencies) -> Any | None:
 
 @router.get("/v1/models")
 async def list_models(request: Request) -> ModelList:
+    import structlog
+    structlog.get_logger("bridge.api").info("list_models_requested")
     return ModelList(data=_build_models())
+
+
+@router.get("/.well-known/opencode.json")
+async def opencode_well_known() -> JSONResponse:
+    return JSONResponse({
+        "id": "subscription-bridge",
+        "name": "SubscriptionBridge Local",
+        "npm": "@ai-sdk/openai-compatible",
+        "options": {
+            "baseURL": "http://127.0.0.1:8787/v1",
+        },
+    })
 
 
 @router.post("/v1/chat/completions")
 async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
+    import structlog
+    log = structlog.get_logger("bridge.api")
+
+    import json as _json
+    log.info("chat_completions_request",
+             model=body.get("model"),
+             msg_count=len(body.get("messages", [])),
+             has_tools=bool(body.get("tools")),
+             body_preview=_json.dumps(body)[:500])
+
     try:
         req = ChatCompletionRequest(**body)
     except Exception as e:
+        log.warning("chat_completions_parse_error", error=str(e))
         return _error_json(str(e), code="invalid_request_error", status_code=422)
 
     ctx_error = _check_context_limit(req)
@@ -170,10 +207,16 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
         require_json_tools=has_tools,
     )
 
+    attachments: list[str] = []
+    for msg in req.messages:
+        if isinstance(msg.content, list):
+            attachments.extend(_extract_images_from_content(msg.content))
+
     provider_req = ProviderRequest(
         run_id=f"api-v1-{uuid.uuid4().hex[:8]}",
         prompt=prompt,
         system_prompt=system_prompt or None,
+        attachments=attachments or None,
         require_json=has_tools,
         timeout_seconds=max(req.max_tokens // 100, 30),
     )
@@ -184,40 +227,48 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
             media_type="text/event-stream",
         )
 
+    if provider_adapter is not None and provider_adapter.name == "gemini":
+        from subscription_bridge.core import AgentRuntime, Task
+        deps_tool_registry = deps.get_tool_registry()
+        runtime = AgentRuntime(
+            provider=provider_adapter,
+            tool_registry=deps_tool_registry,
+            max_steps=25,
+        )
+        last_text = ""
+        for msg in reversed(req.messages):
+            if isinstance(msg.content, str):
+                last_text = msg.content
+                break
+            if isinstance(msg.content, list):
+                for part in msg.content:
+                    if isinstance(part, dict) and part.get("type") == "text":
+                        last_text = part.get("text", "") or ""
+                        break
+                if last_text:
+                    break
+        task_text = last_text or prompt
+        task = Task(text=task_text, workspace=".", provider="gemini", max_steps=25)
+        result = await runtime.run(task)
+        answer = result.answer or "No answer generated"
+        return ChatCompletionResponse(
+            id=f"chatcmpl-{uuid.uuid4().hex[:12]}", created=int(time.time()), model=req.model,
+            choices=[Choice(index=0, message=ResponseMessage(role="assistant", content=answer), finish_reason="stop")],
+            usage=Usage(
+                prompt_tokens=_estimate_tokens(prompt),
+                completion_tokens=_estimate_tokens(answer),
+                total_tokens=_estimate_tokens(prompt) + _estimate_tokens(answer),
+            ),
+        )
+
     response = await provider_adapter.send_prompt(provider_req)
+    _cleanup_temp_files(attachments)
 
     if not response.success:
         return _error_json(response.error or "Provider error", code="provider_error", status_code=502)
 
-    completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
-    now = int(time.time())
-
-    if has_tools:
-        parsed = _parse_tool_calls(response.text)
-        if parsed:
-            tc_choices = [
-                Choice(
-                    index=0,
-                    message=ResponseMessage(
-                        role="assistant",
-                        content=None,
-                        tool_calls=[ToolCall(**tc) for tc in parsed],
-                    ),
-                    finish_reason="tool_calls",
-                )
-            ]
-            return ChatCompletionResponse(
-                id=completion_id, created=now, model=req.model,
-                choices=tc_choices,
-                usage=Usage(
-                    prompt_tokens=_estimate_tokens(prompt),
-                    completion_tokens=_estimate_tokens(response.text),
-                    total_tokens=_estimate_tokens(prompt) + _estimate_tokens(response.text),
-                ),
-            )
-
     return ChatCompletionResponse(
-        id=completion_id, created=now, model=req.model,
+        id=f"chatcmpl-{uuid.uuid4().hex[:12]}", created=int(time.time()), model=req.model,
         choices=[
             Choice(
                 index=0,
@@ -298,6 +349,66 @@ def _extract_text(content: str | list[dict[str, Any]]) -> str:
             if part.get("type") == "text":
                 texts.append(str(part.get("text", "")))
     return "\n".join(texts)
+
+
+def _extract_images_from_content(content: str | list[dict[str, Any]]) -> list[str]:
+    if isinstance(content, str):
+        return []
+    paths: list[str] = []
+    for part in content:
+        if isinstance(part, dict) and part.get("type") == "image_url":
+            url = part.get("image_url", {})
+            if isinstance(url, dict):
+                url = url.get("url", "")
+            if not url:
+                continue
+            path = _save_image(url)
+            if path:
+                paths.append(path)
+    return paths
+
+
+def _save_image(url: str) -> str | None:
+    try:
+        if url.startswith("data:"):
+            match = re.match(r"data:image/(\w+);base64,(.+)", url)
+            if not match:
+                return None
+            ext = match.group(1)
+            data = base64.b64decode(match.group(2))
+            with tempfile.NamedTemporaryFile(
+                mode="wb", suffix=f".{ext}", delete=False,
+                prefix="bridge_img_",
+            ) as f:
+                f.write(data)
+                return f.name
+        else:
+            response = httpx.get(url, timeout=30, follow_redirects=True)
+            response.raise_for_status()
+            content_type = response.headers.get("content-type", "")
+            ext = "png"
+            if "jpeg" in content_type or "jpg" in content_type:
+                ext = "jpg"
+            elif "gif" in content_type:
+                ext = "gif"
+            elif "webp" in content_type:
+                ext = "webp"
+            with tempfile.NamedTemporaryFile(
+                mode="wb", suffix=f".{ext}", delete=False,
+                prefix="bridge_img_",
+            ) as f:
+                f.write(response.content)
+                return f.name
+    except Exception:
+        return None
+
+
+def _cleanup_temp_files(paths: list[str]) -> None:
+    for p in paths:
+        try:
+            os.unlink(p)
+        except Exception:
+            pass
 
 
 def _parse_tool_calls(text: str) -> list[dict[str, Any]]:

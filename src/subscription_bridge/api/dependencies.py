@@ -10,9 +10,11 @@ from subscription_bridge.providers.gemini import GeminiProviderAdapter
 from subscription_bridge.tools import (
     BashTool,
     CodebaseSearchTool,
+    FileEditTool,
     FileReadTool,
     FileWriteTool,
     GitDiffTool,
+    GlobTool,
     GrepTool,
     PatchTool,
     ToolRegistry,
@@ -43,10 +45,12 @@ class AppDependencies:
         r = ToolRegistry()
         r.register(FileReadTool())
         r.register(FileWriteTool())
+        r.register(FileEditTool())
         r.register(GrepTool())
         r.register(BashTool())
         r.register(GitDiffTool())
         r.register(PatchTool())
+        r.register(GlobTool())
         r.register(CodebaseSearchTool())
         return r
 

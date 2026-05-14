@@ -10,7 +10,7 @@ T = TypeVar("T")
 
 def run_async(coro: Awaitable[T], timeout: float | None = None) -> T:
     try:
-        loop = asyncio.get_running_loop()
+        asyncio.get_running_loop()
     except RuntimeError:
         return asyncio.run(coro)
 

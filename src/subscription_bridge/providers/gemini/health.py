@@ -78,6 +78,7 @@ async def check_gemini_ready(page: Any) -> dict[str, Any]:
         "temporary_chat": False,
         "ready": False,
         "needs_login": False,
+        "needs_login_detail": "",
     }
 
     try:
@@ -85,8 +86,18 @@ async def check_gemini_ready(page: Any) -> dict[str, Any]:
         url_str = str(url)
         result["reachable"] = "gemini.google.com" in url_str
         result["app_page"] = _url_is_app(url_str)
+        if not result["reachable"]:
+            if "accounts.google.com" in url_str:
+                result["needs_login_detail"] = (
+                    "Browser is on Google login page. Log in to your Google account."
+                )
+            else:
+                result["needs_login_detail"] = (
+                    f"Page URL is {url_str[:80]}, expected gemini.google.com/app. "
+                    "Open Chrome and navigate there manually."
+                )
     except Exception:
-        pass
+        result["needs_login_detail"] = "Could not read page URL"
 
     if not result["reachable"]:
         result["needs_login"] = True
@@ -97,7 +108,9 @@ async def check_gemini_ready(page: Any) -> dict[str, Any]:
     result["temporary_chat"] = await check_temporary_chat(page)
 
     result["ready"] = result["app_page"] and result["logged_in"] and not result["temporary_chat"]
-    result["needs_login"] = result["reachable"] and not result["logged_in"]
+    result["needs_login"] = not result["logged_in"]
+    if result["needs_login"]:
+        result["needs_login_detail"] = "Gemini app loaded but no composer found. Log in to your Google account."
 
     return result
 
@@ -138,8 +151,6 @@ async def navigate_to_gemini(page: Any) -> None:
 
 
 async def navigate_to_fresh_chat(page: Any) -> None:
-    await page.goto("about:blank", timeout=15000)
-    await _sleep(0.5)
     await navigate_to_gemini(page)
 
 

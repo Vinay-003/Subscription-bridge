@@ -26,9 +26,11 @@ from subscription_bridge.providers.gemini import GeminiProviderAdapter
 from subscription_bridge.tools import (
     BashTool,
     CodebaseSearchTool,
+    FileEditTool,
     FileReadTool,
     FileWriteTool,
     GitDiffTool,
+    GlobTool,
     GrepTool,
     PatchTool,
     ToolRegistry,
@@ -342,12 +344,47 @@ def _get_agent_registry() -> ToolRegistry:
     registry = ToolRegistry()
     registry.register(FileReadTool())
     registry.register(FileWriteTool())
+    registry.register(FileEditTool())
     registry.register(GrepTool())
     registry.register(BashTool())
     registry.register(GitDiffTool())
     registry.register(PatchTool())
+    registry.register(GlobTool())
     registry.register(CodebaseSearchTool())
     return registry
+
+
+async def _ensure_browser_async() -> PlaywrightManager:
+    global _playwright_manager, _session_pool
+    if _playwright_manager is None:
+        config = load_config()
+        browser_config = config.get("browser", {})
+        _playwright_manager = PlaywrightManager(config)
+        await _playwright_manager.start()
+        max_sessions = int(browser_config.get("max_sessions", 3))
+        ttl = float(browser_config.get("session_ttl_seconds", 600))
+        _session_pool = SessionPool(max_sessions=max_sessions, session_ttl_seconds=ttl)
+    return _playwright_manager
+
+
+async def _ensure_gemini_provider_async() -> GeminiProviderAdapter:
+    registry = _get_registry()
+    if "gemini" in registry:
+        existing = registry.get("gemini")
+        return existing
+
+    pm = await _ensure_browser_async()
+    pool = _get_session_pool()
+
+    async def _page_factory() -> Any:
+        return await pm.create_page()
+
+    adapter = GeminiProviderAdapter(
+        session_pool=pool,
+        page_factory=_page_factory,
+    )
+    registry.register(adapter)
+    return adapter
 
 
 @app.command("run")
@@ -369,34 +406,34 @@ def run_task(
         )
     )
 
-    from subscription_bridge.providers.base import ProviderAdapter as _ProviderAdapter
-
-    provider_adapter: _ProviderAdapter
-    if provider == "fake":
-        provider_adapter = FakeProviderAdapter(scripted_responses=[
-            '{"type":"tool_call","thought":"Need to read README",'
-            '"tool_name":"file_read","arguments":{"path":"README.md"}}',
-            '{"type":"final","thought":"Read README successfully",'
-            '"answer":"README.md contains project documentation about SubscriptionBridge."}',
-        ])
-    elif provider == "gemini":
-        try:
-            provider_adapter = _ensure_gemini_provider()
-        except PlaywrightLaunchError as e:
-            console.print(f"[red]Browser error:[/red] {e}")
-            raise typer.Exit(code=1) from e
-    else:
-        reg = _get_registry()
-        try:
-            provider_adapter = reg.get(provider)
-        except KeyError as e:
-            console.print(f"[red]Error:[/red] {e}")
-            raise typer.Exit(code=1) from e
-
     tool_registry = _get_agent_registry()
-    runtime = AgentRuntime(provider=provider_adapter, tool_registry=tool_registry, max_steps=max_steps)
 
     async def _do_run() -> None:
+        from subscription_bridge.providers.base import ProviderAdapter as _ProviderAdapter
+
+        provider_adapter: _ProviderAdapter
+        if provider == "fake":
+            provider_adapter = FakeProviderAdapter(scripted_responses=[
+                '{"type":"tool_call","thought":"Need to read README",'
+                '"tool_name":"file_read","arguments":{"path":"README.md"}}',
+                '{"type":"final","thought":"Read README successfully",'
+                '"answer":"README.md contains project documentation about SubscriptionBridge."}',
+            ])
+        elif provider == "gemini":
+            try:
+                provider_adapter = await _ensure_gemini_provider_async()
+            except PlaywrightLaunchError as e:
+                console.print(f"[red]Browser error:[/red] {e}")
+                return
+        else:
+            reg = _get_registry()
+            try:
+                provider_adapter = reg.get(provider)
+            except KeyError as e:
+                console.print(f"[red]Error:[/red] {e}")
+                return
+
+        runtime = AgentRuntime(provider=provider_adapter, tool_registry=tool_registry, max_steps=max_steps)
         console.print("[dim]Starting agent run...[/dim]")
         agent_task = Task(text=task, workspace=workspace, provider=provider, max_steps=max_steps)
         result = await runtime.run(agent_task)

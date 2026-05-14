@@ -52,6 +52,7 @@ class GeminiProviderAdapter(ProviderAdapter):
         start = time.monotonic()
         session: TabSession | None = None
         upload_meta: dict[str, Any] | None = None
+        prompt = request.prompt
 
         try:
             session = await self._pool.acquire("gemini", request.run_id, self._page_factory)
@@ -59,9 +60,20 @@ class GeminiProviderAdapter(ProviderAdapter):
 
             if request.attachments:
                 upload_meta = await self._handle_attachments(session, request.attachments, start)
+                if upload_meta.get("upload_method") == "text_inline":
+                    preamble_parts = []
+                    for i, fname in enumerate(upload_meta.get("inline_text_attachments", [])):
+                        content = upload_meta.get("inline_text_contents", [{}])[i].get("content", "")
+                        if content:
+                            preamble_parts.append(f"[File: {fname}]\n```\n{content}\n```")
+                    if preamble_parts:
+                        prompt = "\n\n".join(preamble_parts) + "\n\n" + prompt
+
+            if request.require_json and not any(marker in prompt for marker in ["STRICT JSON", "Return STRICT JSON"]):
+                prompt += "\n\nYou MUST return STRICT JSON only. No Markdown. No prose outside JSON."
 
             await find_composer(session.page)
-            await set_prompt_text(session.page, request.prompt)
+            await set_prompt_text(session.page, prompt)
 
             from subscription_bridge.providers.gemini.prompt_io import submit_via_enter
             await submit_via_enter(session.page)
@@ -139,7 +151,7 @@ class GeminiProviderAdapter(ProviderAdapter):
         validated = validate_attachments(attachment_paths, config)
 
         upload_start = time.monotonic()
-        await upload_files(session.page, validated, config)
+        result = await upload_files(session.page, validated, config)
         upload_duration = time.monotonic() - upload_start
 
         meta: dict[str, Any] = {
@@ -151,8 +163,13 @@ class GeminiProviderAdapter(ProviderAdapter):
             "attachment_sizes": [a.size_bytes for a in validated],
             "total_attachment_bytes": sum(a.size_bytes for a in validated),
             "upload_duration_seconds": round(upload_duration, 2),
+            "upload_method": result.get("method", "unknown"),
             "prompt_length": 0,
         }
+        if result.get("method") == "text_inline":
+            texts = result.get("text_contents", [])
+            meta["inline_text_attachments"] = [t["filename"] for t in texts]
+            meta["inline_text_contents"] = [t["content"] for t in texts]
         return meta
 
     async def reset_chat(self, session_id: str) -> None:
@@ -184,17 +201,23 @@ class GeminiProviderAdapter(ProviderAdapter):
     async def _ensure_fresh_chat(self, session: TabSession) -> None:
         await navigate_to_fresh_chat(session.page)
         import time as _time
-        deadline = _time.monotonic() + 180.0
+        deadline = _time.monotonic() + 60.0
         while _time.monotonic() < deadline:
             health = await check_gemini_ready(session.page)
             if health.get("temporary_chat"):
                 raise GeminiError("Gemini is in Temporary Chat mode")
             if health.get("ready"):
                 return
-            if health.get("reachable") and health.get("needs_login"):
-                raise GeminiError("User must log in to Gemini first")
-            await _async_sleep(2.0)
-        raise GeminiError("Timed out waiting for Gemini readiness")
+            if health.get("needs_login"):
+                detail = health.get("needs_login_detail", "")
+                raise GeminiError(
+                    f"User must log in to Gemini first. {detail}".strip()
+                )
+            await _async_sleep(1.0)
+        raise GeminiError(
+            "Timed out waiting for Gemini readiness. "
+            "Open Chrome, navigate to gemini.google.com, log in, and try again."
+        )
 
     async def detailed_health(self) -> dict[str, Any]:
         session = await self._pool.acquire("gemini", "detailed-health", self._page_factory)

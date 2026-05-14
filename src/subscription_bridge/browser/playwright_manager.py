@@ -65,12 +65,6 @@ class PlaywrightManager:
 
         self._context.set_default_timeout(30000)
 
-        page_count = len(self._context.pages)
-        if page_count == 0:
-            await self._context.new_page()
-        elif page_count > 0:
-            await self._context.pages[0].goto("about:blank")
-
         return self._context
 
     async def _start_managed(self, browser_config: dict[str, Any]) -> Any:
@@ -119,9 +113,7 @@ class PlaywrightManager:
 
         self._context.set_default_timeout(30000)
 
-        if self._context.pages:
-            await self._context.pages[0].goto("about:blank")
-        else:
+        if not self._context.pages:
             await self._context.new_page()
 
         return self._context

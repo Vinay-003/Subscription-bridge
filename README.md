@@ -80,13 +80,12 @@ flowchart TB
 ```bash
 # Install
 pip install -e ".[dev]"
-playwright install chromium
 
 # Verify installation
 bridge --help
 bridge provider list
 
-# Try the fake provider
+# Try the fake provider (no browser needed)
 bridge ask "Hello, world!" --provider fake
 bridge run "Read README.md and summarize it" --provider fake -w .
 
@@ -103,7 +102,7 @@ pytest tests/ -v
 
 ## Setup Browser for Gemini
 
-### CDP Mode (recommended)
+### CDP Mode (only way that works)
 
 ```bash
 google-chrome \
@@ -113,13 +112,22 @@ google-chrome \
   --no-default-browser-check
 ```
 
-Then navigate to https://gemini.google.com/app and log in manually.
+Then navigate to https://gemini.google.com/app and log in **once**. Login persists in the profile.
+
+### One-command startup script
+
+```bash
+chmod +x ~/start-bridge.sh
+~/start-bridge.sh
+```
+
+This starts Chrome + the bridge server. Then open OpenCode Desktop and select a Gemini model.
 
 ### Verify
 
 ```bash
-bridge browser doctor
-bridge provider health gemini
+curl http://127.0.0.1:8787/health
+curl http://127.0.0.1:8787/v1/models
 ```
 
 ---
@@ -158,9 +166,31 @@ Available models:
 | Model ID | Backend | Context | Requires Browser |
 |----------|---------|---------|-----------------|
 | `subscription-bridge-fake` | FakeProviderAdapter | 32K | No |
-| `subscription-bridge-gemini-fast` | Gemini 2.0 Flash | 100K | Yes |
-| `subscription-bridge-gemini-thinking` | Gemini 2.5 Pro (thinking) | 500K | Yes |
-| `subscription-bridge-gemini-pro` | Gemini 2.5 Pro | 900K | Yes |
+| `subscription-bridge-gemini-fast` | Gemini 3 Flash | 1M | Yes |
+| `subscription-bridge-gemini-thinking` | Gemini 3 Deep Think | 192K | Yes |
+| `subscription-bridge-gemini-pro` | Gemini 3.1 Pro | 1M | Yes |
+
+### File / Image Upload
+
+Attach files (including images) alongside your prompt — Gemini processes them natively:
+
+```bash
+# Describe an image
+bridge ask "What's in this image?" --provider gemini --file photo.jpg
+
+# Analyze a document
+bridge ask "Summarize this" --provider gemini --file report.pdf
+
+# Multiple files
+bridge ask "Compare these images" --provider gemini --file img1.png --file img2.png
+
+# Via API
+curl -X POST http://127.0.0.1:8787/ask \
+  -H "Content-Type: application/json" \
+  -d '{"provider":"gemini","prompt":"Describe this","files":["/path/to/image.png"]}'
+```
+
+Upload uses CDP DOM injection to bypass the native OS file dialog — works with Chrome in CDP mode.
 
 See [docs/opencode.md](docs/opencode.md) for OpenCode configuration.
 
