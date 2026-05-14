@@ -58,6 +58,11 @@ def build_system_prompt(tools: list[dict[str, Any]]) -> str:
         "No Markdown. No prose outside JSON.\n"
         "No explanation. No commentary.\n"
         "Do NOT suggest using Workspace, apps, or third-party tools.\n\n"
+        "IMPORTANT ESCAPING RULES:\n"
+        "  - In JSON string values, double quotes (\"\") MUST be escaped as \\\"\n"
+        "  - Newlines inside strings MUST be escaped as \\n\n"
+        "  - Tab characters MUST be escaped as \\t\n"
+        "  - Use \\\" for any quote that appears inside an argument value\n\n"
         "Output format:\n\n"
         "Tool call:\n"
         f"{TOOL_FORMAT_EXAMPLE}\n\n"
@@ -81,7 +86,8 @@ def build_observation_context(state: AgentState) -> str:
         result_preview = obs.tool_result[:2000] if obs.tool_result else "(empty)"
         success_mark = "ok" if obs.tool_success else "FAILED"
         lines.append(f"  Step {obs.step_number}: {tool_name} ({success_mark})")
-        lines.append(f"    Result: {result_preview}")
+        escaped = result_preview.replace('"', "'")
+        lines.append(f"    Result: {escaped}")
         lines.append("")
 
     return "\n".join(lines)
@@ -126,13 +132,30 @@ class Planner:
     def __init__(self, tools: list[dict[str, Any]]) -> None:
         self._tools = tools
 
+    def _tool_descriptions(self) -> str:
+        return "\n\n".join(
+            f"  - {t['name']}({', '.join(f'{k}: {v}' for k, v in t.get('input_schema', {}).items())})"
+            f"\n    {t.get('description', '')}"
+            for t in self._tools
+        )
+
     def build_prompt(self, state: AgentState) -> str:
         is_continuation = state.steps > 0
         if is_continuation:
             ctx = build_observation_context(state)
-            if ctx:
-                return ctx + "\n\nWhat is the next action? Return STRICT JSON."
-            return "What is the next action? Return STRICT JSON."
+            base = ctx + "\n\n" if ctx else ""
+            return base + (
+                "Available tools:\n"
+                f"{self._tool_descriptions()}\n\n"
+                "What is the next action?\n\n"
+                "Tool call:\n"
+                f"{TOOL_FORMAT_EXAMPLE}\n\n"
+                "Final answer:\n"
+                f"{FINAL_FORMAT_EXAMPLE}\n\n"
+                "Return STRICT JSON only. "
+                "Escape any double quotes inside string values as \\\". "
+                "Escape newlines as \\n."
+            )
 
         system = build_system_prompt(self._tools)
         user = build_user_prompt(state)
