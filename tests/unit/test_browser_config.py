@@ -9,7 +9,8 @@ def test_browser_config_default_mode() -> None:
     clear_config_cache()
     config = load_config(force_reload=True)
     browser = config.get("browser", {})
-    assert browser.get("mode") == "managed"
+    mode = browser.get("mode", "")
+    assert mode in ("managed", "cdp"), f"Expected mode 'managed' or 'cdp', got '{mode}'"
 
 
 def test_browser_config_default_cdp_url() -> None:

@@ -137,6 +137,15 @@ def _gemini_model_variant(model_id: str) -> str:
     return mapping.get(_strip_provider_prefix(model_id), "Gemini 3 Flash")
 
 
+def _conversation_id(messages: list[Any]) -> str:
+    import hashlib
+    raw = "|".join(
+        str(m.role) + ":" + (str(m.content)[:200] if m.content else "")
+        for m in messages[:6]
+    )
+    return "conv-" + hashlib.md5(raw.encode()).hexdigest()[:12]
+
+
 async def _resolve_adapter(model_id: str, deps: AppDependencies) -> Any | None:
     model = _strip_provider_prefix(model_id)
     if model == MODEL_FAKE:
@@ -207,13 +216,19 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
         require_json_tools=has_tools,
     )
 
+    if _strip_provider_prefix(req.model) in GEMINI_MODELS:
+        variant = _gemini_model_variant(req.model)
+        if not has_tools:
+            model_hint = f"\n\n[Using {variant} — continue in the existing Gemini chat tab]"
+            prompt += model_hint
+
     attachments: list[str] = []
     for msg in req.messages:
         if isinstance(msg.content, list):
             attachments.extend(_extract_images_from_content(msg.content))
 
     provider_req = ProviderRequest(
-        run_id=f"api-v1-{uuid.uuid4().hex[:8]}",
+        run_id=_conversation_id(req.messages) if not has_tools else f"api-v1-{uuid.uuid4().hex[:8]}",
         prompt=prompt,
         system_prompt=system_prompt or None,
         attachments=attachments or None,
@@ -221,18 +236,19 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
         timeout_seconds=max(req.max_tokens // 100, 30),
     )
 
-    if req.stream:
+    if req.stream and provider_adapter is not None and provider_adapter.name != "gemini":
         return StreamingResponse(
             _stream_response(provider_adapter, provider_req, req.model),
             media_type="text/event-stream",
         )
 
-    if provider_adapter is not None and provider_adapter.name == "gemini":
+    if provider_adapter is not None and provider_adapter.name == "gemini" and has_tools:
         from subscription_bridge.core import AgentRuntime, Task
-        deps_tool_registry = deps.get_tool_registry()
+
+        dep_tool_registry = deps.get_tool_registry()
         runtime = AgentRuntime(
             provider=provider_adapter,
-            tool_registry=deps_tool_registry,
+            tool_registry=dep_tool_registry,
             max_steps=25,
         )
         last_text = ""
@@ -248,9 +264,19 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
                 if last_text:
                     break
         task_text = last_text or prompt
+        variant = _gemini_model_variant(req.model)
+        if variant:
+            task_text = f"[Model: {variant}]\n{task_text}"
         task = Task(text=task_text, workspace=".", provider="gemini", max_steps=25)
         result = await runtime.run(task)
         answer = result.answer or "No answer generated"
+
+        if req.stream:
+            return StreamingResponse(
+                _stream_agent_answer(answer, req.model),
+                media_type="text/event-stream",
+            )
+
         return ChatCompletionResponse(
             id=f"chatcmpl-{uuid.uuid4().hex[:12]}", created=int(time.time()), model=req.model,
             choices=[Choice(index=0, message=ResponseMessage(role="assistant", content=answer), finish_reason="stop")],
@@ -261,6 +287,7 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
             ),
         )
 
+    # Non-Gemini providers (fake) use direct send_prompt
     response = await provider_adapter.send_prompt(provider_req)
     _cleanup_temp_files(attachments)
 
@@ -464,6 +491,32 @@ async def _stream_response(
             yield f"data: {content_chunk.model_dump_json()}\n\n"
             await asyncio.sleep(0.01)
 
+    stop_chunk = ChatCompletionChunk(
+        id=completion_id, created=now, model=model,
+        choices=[ChoiceDelta(index=0, delta=DeltaMessage(), finish_reason="stop")],
+    )
+    yield f"data: {stop_chunk.model_dump_json()}\n\n"
+    yield "data: [DONE]\n\n"
+
+
+async def _stream_agent_answer(answer: str, model: str) -> AsyncGenerator[str, None]:
+    completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+    now = int(time.time())
+    role_chunk = ChatCompletionChunk(
+        id=completion_id, created=now, model=model,
+        choices=[ChoiceDelta(index=0, delta=DeltaMessage(role="assistant"), finish_reason=None)],
+    )
+    yield f"data: {role_chunk.model_dump_json()}\n\n"
+    if answer:
+        chunk_size = max(len(answer) // 10, 5)
+        for i in range(0, len(answer), chunk_size):
+            chunk_text = answer[i:i + chunk_size]
+            content_chunk = ChatCompletionChunk(
+                id=completion_id, created=now, model=model,
+                choices=[ChoiceDelta(index=0, delta=DeltaMessage(content=chunk_text), finish_reason=None)],
+            )
+            yield f"data: {content_chunk.model_dump_json()}\n\n"
+            await asyncio.sleep(0.01)
     stop_chunk = ChatCompletionChunk(
         id=completion_id, created=now, model=model,
         choices=[ChoiceDelta(index=0, delta=DeltaMessage(), finish_reason="stop")],

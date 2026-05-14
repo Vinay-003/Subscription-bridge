@@ -23,6 +23,14 @@ class SessionPool:
     async def acquire(self, provider_name: str, run_id: str, page_factory: Any) -> TabSession:
         self._evict_stale()
 
+        existing = self._find_by_run_id(run_id)
+        if existing is not None:
+            ok = await existing.ensure_alive()
+            if ok:
+                existing.mark_busy(run_id)
+                return existing
+            self._sessions.pop(existing.session_id, None)
+
         idle = self._find_idle(provider_name)
         if idle is not None:
             ok = await idle.ensure_alive()
@@ -122,6 +130,14 @@ class SessionPool:
     @property
     def total_count(self) -> int:
         return len(self._sessions)
+
+    def _find_by_run_id(self, run_id: str) -> TabSession | None:
+        for s in self._sessions.values():
+            if s.current_run_id == run_id and s.state not in (
+                SessionState.CLOSED, SessionState.CRASHED,
+            ):
+                return s
+        return None
 
     def _find_idle(self, provider_name: str) -> TabSession | None:
         for session in self._sessions.values():
