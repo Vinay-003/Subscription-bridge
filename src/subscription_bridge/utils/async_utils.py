@@ -1,10 +1,42 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar, cast
 
 T = TypeVar("T")
+
+
+def run_async(coro: Awaitable[T], timeout: float | None = None) -> T:
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    result: list[T] = []
+    exc: list[BaseException] = []
+
+    def _run() -> None:
+        new_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(new_loop)
+        try:
+            result.append(
+                new_loop.run_until_complete(
+                    asyncio.wait_for(coro, timeout) if timeout else coro
+                )
+            )
+        except BaseException as e:
+            exc.append(e)
+        finally:
+            new_loop.close()
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    t.join()
+    if exc:
+        raise exc[0]
+    return result[0]
 
 
 class OperationTimeoutError(Exception):

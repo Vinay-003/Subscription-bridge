@@ -1,6 +1,7 @@
 from subscription_bridge.utils.async_utils import (
     OperationTimeoutError,
     gather_with_concurrency,
+    run_async,
     run_sync_with_timeout,
     run_with_timeout,
 )
@@ -35,6 +36,7 @@ __all__ = [
     "retry_async",
     "RetryConfig",
     "RetryError",
+    "run_async",
     "run_with_timeout",
     "run_sync_with_timeout",
     "gather_with_concurrency",

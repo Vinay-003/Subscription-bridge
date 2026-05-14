@@ -63,6 +63,9 @@ class GeminiProviderAdapter(ProviderAdapter):
             await find_composer(session.page)
             await set_prompt_text(session.page, request.prompt)
 
+            from subscription_bridge.providers.gemini.prompt_io import submit_via_enter
+            await submit_via_enter(session.page)
+
             accepted = await wait_for_send_confirmation(session.page, timeout=35.0)
             if not accepted:
                 await session.screenshot_debug("send_not_confirmed")

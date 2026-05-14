@@ -13,7 +13,7 @@ app:
   default_timeout_seconds: 300
 
 browser:
-  mode: managed
+  mode: cdp
   cdp_url: "http://127.0.0.1:9333"
   headless: false
   user_data_dir: "~/.subscription-bridge/chrome-profile"

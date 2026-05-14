@@ -288,6 +288,16 @@ async def set_prompt_text(
     )
 
 
+async def submit_via_enter(page: Any) -> None:
+    try:
+        composer = await find_composer(page)
+        await composer.focus()
+        await composer.click()
+        await page.keyboard.press("Enter")
+    except Exception:
+        pass
+
+
 async def _sleep(seconds: float) -> None:
     import asyncio
 

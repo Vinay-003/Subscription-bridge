@@ -126,14 +126,12 @@ def _gemini_model_variant(model_id: str) -> str:
     return mapping.get(model_id, "2.0 Flash")
 
 
-def _resolve_adapter_sync(model_id: str, deps: AppDependencies) -> Any | None:
+async def _resolve_adapter(model_id: str, deps: AppDependencies) -> Any | None:
     if model_id == MODEL_FAKE:
         return deps.get_registry().get("fake")
     if model_id in GEMINI_MODELS:
         try:
-            import asyncio
-            gemini_adapter = asyncio.run(deps.get_gemini_adapter())
-            return gemini_adapter
+            return await deps.get_gemini_adapter()
         except Exception:
             return None
     return None
@@ -157,7 +155,7 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
 
     deps = _get_deps(request)
 
-    provider_adapter = _resolve_adapter_sync(req.model, deps)
+    provider_adapter = await _resolve_adapter(req.model, deps)
     if provider_adapter is None:
         return _error_json(
             f"Model not found: {req.model}",

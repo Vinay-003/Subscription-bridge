@@ -1,0 +1,570 @@
+{
+  "/home/mylappy/Projects/subscription-bridge/geminiautomation.py": {
+    "mtime": 1778532271.6504915,
+    "hash": "d9c1a296cd273bfbfba5817e85d43068"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/__init__.py": {
+    "mtime": 1778532528.266888,
+    "hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/integration/__init__.py": {
+    "mtime": 1778532528.9467926,
+    "hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_fake_provider.py": {
+    "mtime": 1778532583.4574316,
+    "hash": "4379be6e1803151d6671efc10fe60217"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_config.py": {
+    "mtime": 1778533389.8517997,
+    "hash": "bf00804a23171e4ef08eb3a3eb907d21"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_login_manager.py": {
+    "mtime": 1778534234.1363583,
+    "hash": "1dfcaa0af1f1abc98766cb527c8621b0"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_gemini_selectors.py": {
+    "mtime": 1778534741.7124193,
+    "hash": "cbd0ab9196f7c1822edeef729f0a324c"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_retriever.py": {
+    "mtime": 1778566900.936199,
+    "hash": "4dd7e777b33bcbb84b5c1b3098ee04e2"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_retry.py": {
+    "mtime": 1778533912.5748062,
+    "hash": "a32fe056da14812dfaa1656343f227e7"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_attachments.py": {
+    "mtime": 1778575181.3487368,
+    "hash": "831c502f6d9facdb038f11c942cd8c7b"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_selector_registry.py": {
+    "mtime": 1778534351.6834521,
+    "hash": "ab9468db263fce0968a4cc9815bd4e4f"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_registry.py": {
+    "mtime": 1778533389.8517997,
+    "hash": "6528aba5a57e9fa8ef034df942be2980"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_async_utils.py": {
+    "mtime": 1778533911.5026093,
+    "hash": "5619cbe4f4202b0e6069c17ab820b56e"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_tab_session.py": {
+    "mtime": 1778534305.8421478,
+    "hash": "64fb7cf3e65e2dfd1768c1d3bdf394b3"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_logger_config.py": {
+    "mtime": 1778533747.68382,
+    "hash": "22848027f34bd6967c489cbf4125eb1a"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_vector_store.py": {
+    "mtime": 1778566874.961916,
+    "hash": "77463156d8113c9b104083699f98c055"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_security.py": {
+    "mtime": 1778533743.5985787,
+    "hash": "e22bb14970ad29fbf6833da73ffd2da7"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_embeddings.py": {
+    "mtime": 1778567113.5030658,
+    "hash": "1d719a49488d5815a6acad7288feea43"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_api.py": {
+    "mtime": 1778576834.7355204,
+    "hash": "b34c75005aa5d7b1875224fab5d2389c"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_gemini_upload.py": {
+    "mtime": 1778576283.5653558,
+    "hash": "9931a3d06e7527d4bef7812c6b191187"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_agent_state.py": {
+    "mtime": 1778535411.8132489,
+    "hash": "3d20d40a4dfdca2b8346cc1daf833d67"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_chunker.py": {
+    "mtime": 1778566861.1835036,
+    "hash": "4c1174f9d8fa349fd20c8af359daeb24"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_paths.py": {
+    "mtime": 1778533736.7699425,
+    "hash": "6da515cd053db006c6140ec067a383cd"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_symbol_graph.py": {
+    "mtime": 1778566882.5966554,
+    "hash": "3b68dba1ac9230f6f321f14c547f4cdd"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_gemini_health.py": {
+    "mtime": 1778534921.7216122,
+    "hash": "dab1e40d86d7e6b34625627663810422"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_fake_provider_scripted.py": {
+    "mtime": 1778535415.3684402,
+    "hash": "79962f2b33b4f5188d40e4151d4d5492"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_session_pool.py": {
+    "mtime": 1778534265.6691103,
+    "hash": "b77837c3b4243395ab599c4a3d7f29dc"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_events.py": {
+    "mtime": 1778533769.8451872,
+    "hash": "74d9eecad5be3c240eb2ea962d92e5d1"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_openai_api.py": {
+    "mtime": 1778579820.1146247,
+    "hash": "59de8571c0af32580280a91d45074aba"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_agent_runtime.py": {
+    "mtime": 1778535404.652527,
+    "hash": "c3a434f6d95ba4a5219c202f42b4a37b"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_download_manager.py": {
+    "mtime": 1778534331.870623,
+    "hash": "f8364ed2e6b3c53dd4afe236ea1b2b62"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_planner.py": {
+    "mtime": 1778535407.8466523,
+    "hash": "44e70445981cd64f639222b3d9f88b54"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_prompt_integrity.py": {
+    "mtime": 1778534977.792584,
+    "hash": "84cf38aed36702be938fe136649a1e09"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_parser.py": {
+    "mtime": 1778536456.976398,
+    "hash": "ec1c6b91d23b58329f7348e39d926f63"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_tools.py": {
+    "mtime": 1778567115.6661677,
+    "hash": "3a8b0cf1017a51fcd8cd818ebe9bf4ac"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_ui_guard.py": {
+    "mtime": 1778534212.414324,
+    "hash": "9cc7e782e495431cf0710756087aff27"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_response_reader.py": {
+    "mtime": 1778534769.2281654,
+    "hash": "158cfe7d8fbd21f77e998a43852d75ee"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/__init__.py": {
+    "mtime": 1778532528.629837,
+    "hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_tool_registry.py": {
+    "mtime": 1778535396.5891612,
+    "hash": "f21b1b378490ef9bdca195b770654822"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_codebase_indexer.py": {
+    "mtime": 1778566892.1173897,
+    "hash": "2c8afcf525854ee807e9d6297edcbc13"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_playwright_manager.py": {
+    "mtime": 1778534220.2607226,
+    "hash": "61ffd28e1138b885e6bad3ec0146c8dc"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_browser_config.py": {
+    "mtime": 1778534217.7848039,
+    "hash": "f03907847ebf6c9f767997d441d59a6f"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_gemini_adapter_files.py": {
+    "mtime": 1778575181.3487368,
+    "hash": "14e3b7c92e41bcf5ec0daeb1fd956ae4"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_gemini_adapter.py": {
+    "mtime": 1778575644.517921,
+    "hash": "47e41bffe70f3c34a5e37fde9868c952"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/unit/test_codebase_search_tool.py": {
+    "mtime": 1778567111.7659843,
+    "hash": "8d733b341939ed1652f3bae830c764b5"
+  },
+  "/home/mylappy/Projects/subscription-bridge/tests/e2e/__init__.py": {
+    "mtime": 1778532529.2987435,
+    "hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/main.py": {
+    "mtime": 1778532575.161518,
+    "hash": "128ad6ed67db61c61227a707d77eb1d3"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/__init__.py": {
+    "mtime": 1778532522.2777302,
+    "hash": "bc50d33e985acabb7796f9ca904992a7"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/providers/registry.py": {
+    "mtime": 1778532555.5041406,
+    "hash": "a04f221395797f5d76faf3389a7d5b13"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/providers/base.py": {
+    "mtime": 1778533471.4698408,
+    "hash": "32b9c15ce8a267588c75a12001fe9c43"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/providers/__init__.py": {
+    "mtime": 1778533389.8507998,
+    "hash": "db6c8eced96b6454d57c573a24bb0b3a"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/providers/fake.py": {
+    "mtime": 1778535424.6801672,
+    "hash": "d14cd2958ba1ace234195b5901f86107"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/providers/chatgpt/__init__.py": {
+    "mtime": 1778532524.3234417,
+    "hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/providers/claude/__init__.py": {
+    "mtime": 1778532524.6943896,
+    "hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/providers/gemini/attachments.py": {
+    "mtime": 1778575193.7957451,
+    "hash": "54730a7b73531975b2767ec44e44c2aa"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/providers/gemini/prompt_io.py": {
+    "mtime": 1778534788.812274,
+    "hash": "1e5801f0511a6efa03129baf4a2947a0"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/providers/gemini/adapter.py": {
+    "mtime": 1778575191.9007437,
+    "hash": "59bd72c17dc10d28a44be17719b203d0"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/providers/gemini/upload.py": {
+    "mtime": 1778576084.1881635,
+    "hash": "7b7c3f50183c05efb8b66e49e9cbc49e"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/providers/gemini/selectors.py": {
+    "mtime": 1778534844.3817494,
+    "hash": "ce98f3269e66e40c0ec2d88a67224673"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/providers/gemini/__init__.py": {
+    "mtime": 1778534669.4757202,
+    "hash": "c9223ba3caa73c34406196bd0fc8a69e"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/providers/gemini/health.py": {
+    "mtime": 1778534778.8687265,
+    "hash": "847db789f2c79e687b3e7a911b790134"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/providers/gemini/response_reader.py": {
+    "mtime": 1778534778.8687265,
+    "hash": "c3bf146024308c4d091388ec3ce3bd4a"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/parsing/repair.py": {
+    "mtime": 1778536385.7276552,
+    "hash": "d13f0e808a1b3592d44d56ce29e8f474"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/parsing/schemas.py": {
+    "mtime": 1778535272.9043946,
+    "hash": "0552762476b99e4661471100ffee66a2"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/parsing/__init__.py": {
+    "mtime": 1778535424.6791668,
+    "hash": "cc80eb9e28239cb0dc50a938bd0b13e5"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/parsing/json_parser.py": {
+    "mtime": 1778535283.4366338,
+    "hash": "bd0f469eb91535588aac33d3f2164270"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/parsing/validators.py": {
+    "mtime": 1778535278.5333242,
+    "hash": "a88bcb247496c82100d43abbaa7b0d31"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/memory/retriever.py": {
+    "mtime": 1778567301.6911223,
+    "hash": "32854465501d01b966064a3d169d7d60"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/memory/symbol_graph.py": {
+    "mtime": 1778566922.435935,
+    "hash": "4ed9d51ece40200e831aebae23e42878"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/memory/vector_store.py": {
+    "mtime": 1778566922.434935,
+    "hash": "902f94996f436ccd86852efd9be6a6b7"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/memory/embeddings.py": {
+    "mtime": 1778567014.3051777,
+    "hash": "65b307df79bd6c57656128b7eae08177"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/memory/models.py": {
+    "mtime": 1778566653.2665722,
+    "hash": "6281ab7d2691102768522d9aff8f0d4e"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/memory/chunker.py": {
+    "mtime": 1778566922.434935,
+    "hash": "93f3534ca306bd5e1f2aed6931b1a550"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/memory/__init__.py": {
+    "mtime": 1778566922.4339352,
+    "hash": "8706187bdba69e626cfc4260621b4312"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/memory/codebase_indexer.py": {
+    "mtime": 1778567051.765432,
+    "hash": "6665e69a987d3f3e75e7c9f1b9b49eeb"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/utils/async_utils.py": {
+    "mtime": 1778533921.9373317,
+    "hash": "0347a0198cc5102d5dcb2ffeaa95a1c9"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/utils/retry.py": {
+    "mtime": 1778533880.950417,
+    "hash": "c1f154c85a609926afdb92e01381979f"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/utils/paths.py": {
+    "mtime": 1778534110.498981,
+    "hash": "bb47ce5ff898c08020aebf20a9f3f0d3"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/utils/security.py": {
+    "mtime": 1778533694.4382174,
+    "hash": "44c94bae335ea34daa15f70044968eb1"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/utils/__init__.py": {
+    "mtime": 1778534148.2671485,
+    "hash": "52a9cb2c94e6eb954cbd9c1dc778b0d2"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/utils/config.py": {
+    "mtime": 1778534112.820868,
+    "hash": "0863600e421b47d9d5be44ba02b78834"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/cli/__init__.py": {
+    "mtime": 1778532527.2000375,
+    "hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/cli/app.py": {
+    "mtime": 1778576777.7898228,
+    "hash": "1f02b8fee42afc0a61e76e6dfb0b03ba"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/core/agent_state.py": {
+    "mtime": 1778535450.4580512,
+    "hash": "33f76e3c690cd7b8a0459ad4e975918f"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/core/planner.py": {
+    "mtime": 1778535248.141205,
+    "hash": "7808b76b54819bb4db42a7c9155f5acb"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/core/task.py": {
+    "mtime": 1778535232.5915031,
+    "hash": "60837030469eb4b742648a840113c2c3"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/core/loop_controller.py": {
+    "mtime": 1778535606.6807761,
+    "hash": "db9725e425bdaba5fa76fc27db38a308"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/core/__init__.py": {
+    "mtime": 1778535424.6791668,
+    "hash": "dbe45ccdfe606462f2537fd2522af506"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/core/message.py": {
+    "mtime": 1778535233.539874,
+    "hash": "5d16c3225343fd67ebcd06851e3ccf8d"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/core/errors.py": {
+    "mtime": 1778535231.7100964,
+    "hash": "e3e0f9e792ecf614fd7037054b50a212"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/core/run_manager.py": {
+    "mtime": 1778535253.5498905,
+    "hash": "d22f199fb65b227c9cc7f5df22812cea"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/core/agent_runtime.py": {
+    "mtime": 1778535434.319716,
+    "hash": "f7c894ac7b35b5b8df1347022a9b1da8"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/api/openai_models.py": {
+    "mtime": 1778580836.6570568,
+    "hash": "a2ac3202b8696b80876936ac4a0085d2"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/api/server.py": {
+    "mtime": 1778579583.5111222,
+    "hash": "315f89d6eb2e23ec91e7ef32c27c53f9"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/api/routes.py": {
+    "mtime": 1778577085.2733574,
+    "hash": "3839c9b048e91b891378c3f3f61b1808"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/api/models.py": {
+    "mtime": 1778576703.8348799,
+    "hash": "0ff2933f529b7701f5667214020bc8f6"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/api/__init__.py": {
+    "mtime": 1778532526.9510722,
+    "hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/api/openai_compat.py": {
+    "mtime": 1778581003.2433832,
+    "hash": "9895b85dfb416ffe0155de88125b33d6"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/api/dependencies.py": {
+    "mtime": 1778576880.4680645,
+    "hash": "84613cf330a2839f372f8c7cbce836c1"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/logging/events.py": {
+    "mtime": 1778533676.5881867,
+    "hash": "25de89811dd7a21df5d864df6e46e785"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/logging/logger.py": {
+    "mtime": 1778533714.4541378,
+    "hash": "6e75bcfe4bf6d9e8b1974714b992881e"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/logging/__init__.py": {
+    "mtime": 1778532527.5629866,
+    "hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/tools/registry.py": {
+    "mtime": 1778535290.2807271,
+    "hash": "a1dc3bbf1a6ba9db9c5944ee0c317b22"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/tools/bash.py": {
+    "mtime": 1778535506.8474798,
+    "hash": "cdb619b26439a4ab04ac133d0786f46f"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/tools/patch.py": {
+    "mtime": 1778535538.8304071,
+    "hash": "1c69fc179cab5c01057d9a88e76e47f5"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/tools/grep.py": {
+    "mtime": 1778535538.830266,
+    "hash": "474afa55d99f60846359c26f68770d5d"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/tools/git_diff.py": {
+    "mtime": 1778535538.8303363,
+    "hash": "d30b4b25647c3edf248e016587b279ff"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/tools/executor.py": {
+    "mtime": 1778535424.6801672,
+    "hash": "eda2c506694f8e2a012e346f44020d9d"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/tools/file_write.py": {
+    "mtime": 1778535538.8301902,
+    "hash": "8134882ce1d691845d5d7ecc4b52fc71"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/tools/codebase_search.py": {
+    "mtime": 1778566922.434935,
+    "hash": "c3c376dd671fe6738c0e8e8ac5c25cdd"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/tools/base.py": {
+    "mtime": 1778535288.4674613,
+    "hash": "a0373bc91b70c405abd6a74ffb87e0a6"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/tools/file_read.py": {
+    "mtime": 1778535538.8300796,
+    "hash": "ede19dbce72ce64b5bd49e7eeff8dbb5"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/tools/__init__.py": {
+    "mtime": 1778535424.6791668,
+    "hash": "7bc1ddb0ca4f1451fd69f503081adb9e"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/context/__init__.py": {
+    "mtime": 1778532526.156184,
+    "hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/browser/browser_context.py": {
+    "mtime": 1778534080.3384533,
+    "hash": "9ae95a3c073bee2a3c858b7cbaa7e696"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/browser/session_pool.py": {
+    "mtime": 1778534064.067251,
+    "hash": "97a1c9f1da4cadf5866c3dc65c64f966"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/browser/selector_registry.py": {
+    "mtime": 1778534927.2809944,
+    "hash": "00e5a1344a98629eec9cf86980cb8d73"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/browser/playwright_manager.py": {
+    "mtime": 1778534263.267634,
+    "hash": "537662ea24e4431dfb6c3580974c1c61"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/browser/download_manager.py": {
+    "mtime": 1778534304.7916644,
+    "hash": "f6e83c1835d05cb90d74791511c5b673"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/browser/tab_session.py": {
+    "mtime": 1778534332.8673384,
+    "hash": "a34d366241d3fa8bb03a54b020273f81"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/browser/__init__.py": {
+    "mtime": 1778534258.8258452,
+    "hash": "ba1e47b9a522888f31eb35d2593c1be0"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/browser/ui_guard.py": {
+    "mtime": 1778534092.7508464,
+    "hash": "436cd11c71af273edf6c2599c5f81d89"
+  },
+  "/home/mylappy/Projects/subscription-bridge/src/subscription_bridge/browser/login_manager.py": {
+    "mtime": 1778534097.1886299,
+    "hash": "8f21d170966828d2e795530e268cafc4"
+  },
+  "/home/mylappy/Projects/subscription-bridge/AGENTS.md": {
+    "mtime": 1778579221.62305,
+    "hash": "fe7f7305c09672f53ff34c4e007e6ce5"
+  },
+  "/home/mylappy/Projects/subscription-bridge/README.md": {
+    "mtime": 1778581039.8392878,
+    "hash": "f354c232913fb4f72019abc12fdf1de4"
+  },
+  "/home/mylappy/Projects/subscription-bridge/requirements.txt": {
+    "mtime": 1778532595.0199344,
+    "hash": "06d9ff61e4af8b1b78e73e96cff77e70"
+  },
+  "/home/mylappy/Projects/subscription-bridge/docs/opencode.md": {
+    "mtime": 1778581031.917307,
+    "hash": "4a65bd9581e3889ed40585be6408a53a"
+  },
+  "/home/mylappy/Projects/subscription-bridge/docs/demo_script.md": {
+    "mtime": 1778579102.5044627,
+    "hash": "a87c4f77b1da896bd97b95fd26db8913"
+  },
+  "/home/mylappy/Projects/subscription-bridge/docs/browser_setup.md": {
+    "mtime": 1778579130.9185972,
+    "hash": "9eef3c8a01dd521d5830f090ebf26127"
+  },
+  "/home/mylappy/Projects/subscription-bridge/docs/configuration.md": {
+    "mtime": 1778579119.6385434,
+    "hash": "665282fe793d351573f82ae211320c22"
+  },
+  "/home/mylappy/Projects/subscription-bridge/docs/api.md": {
+    "mtime": 1778579634.7114398,
+    "hash": "10e37f088a0c35d9544999cf44f2722c"
+  },
+  "/home/mylappy/Projects/subscription-bridge/configs/tool_permissions.yaml": {
+    "mtime": 1778532514.299446,
+    "hash": "701f5f874e711bfa0671f4b6bfccb113"
+  },
+  "/home/mylappy/Projects/subscription-bridge/configs/providers.yaml": {
+    "mtime": 1778532499.4165246,
+    "hash": "4df27597bcd0785bd0c7e1f229e62294"
+  },
+  "/home/mylappy/Projects/subscription-bridge/configs/app.yaml": {
+    "mtime": 1778575065.376665,
+    "hash": "fcdb5c865d76b4f870fc7186d1d63ee6"
+  },
+  "/home/mylappy/Projects/subscription-bridge/configs/selectors/chatgpt.yaml": {
+    "mtime": 1778532507.4336908,
+    "hash": "ce04d43005755d9aa70b33e9bb0e5e28"
+  },
+  "/home/mylappy/Projects/subscription-bridge/configs/selectors/gemini.yaml": {
+    "mtime": 1778575091.9046805,
+    "hash": "c87552d944a19dcf14f7c7788b9307cc"
+  },
+  "/home/mylappy/Projects/subscription-bridge/configs/selectors/claude.yaml": {
+    "mtime": 1778532509.7509525,
+    "hash": "94456a93ce9ebc73d4e8a6bda4164a2b"
+  },
+  "/home/mylappy/Projects/subscription-bridge/examples/prompts/file_summary.txt": {
+    "mtime": 1778579162.714752,
+    "hash": "86c946d1146d7f5fa5af3a8512840fc7"
+  },
+  "/home/mylappy/Projects/subscription-bridge/examples/prompts/architecture_review.txt": {
+    "mtime": 1778579164.5727613,
+    "hash": "557c3186b036d5fde8b74fcc961a113e"
+  },
+  "/home/mylappy/Projects/subscription-bridge/examples/prompts/code_review.txt": {
+    "mtime": 1778579160.8227427,
+    "hash": "d7173ae30e5627ec317b358b816c1429"
+  },
+  "/home/mylappy/Projects/subscription-bridge/examples/files/sample.txt": {
+    "mtime": 1778579153.7277079,
+    "hash": "c2ac68c249887dc63aba6450bafecf06"
+  },
+  "/home/mylappy/Projects/subscription-bridge/examples/files/sample.md": {
+    "mtime": 1778579159.296735,
+    "hash": "225f526f2f35537f4c09ff5e275ea65c"
+  }
+}

@@ -100,7 +100,7 @@ async def wait_for_response_complete(
         report = await submission_activity_report(page)
         current_count = report.get("assistantCount", 0)
 
-        is_generating = report.get("stopVisible") or report.get("thinkingVisible") or report.get("progressVisible")
+        is_generating = report.get("stopVisible") or report.get("progressVisible")
 
         if not is_generating:
             if current_count > last_count:
@@ -121,28 +121,66 @@ async def wait_for_response_complete(
 
 
 async def extract_latest_assistant_text(page: Any) -> str:
-    response_selectors = get_selector("response")
-    for selector in response_selectors:
-        try:
-            script = r"""
-    (selector) => {
-        const elements = Array.from(document.querySelectorAll(selector));
-        if (!elements.length) return '';
-        const lastEl = elements[elements.length - 1];
-        const rect = lastEl.getBoundingClientRect();
-        const style = getComputedStyle(lastEl);
-        if (rect.width === 0 || rect.height === 0 ||
-            style.display === 'none' || style.visibility === 'hidden') {
-            return '';
+    script = r"""
+    () => {
+        const main = document.querySelector('main') || document.body;
+        function visible(el) {
+            if (!el) return false;
+            const r = el.getBoundingClientRect();
+            const s = getComputedStyle(el);
+            return r.width > 0 && r.height > 0 &&
+                   s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0';
         }
-        return lastEl.innerText || lastEl.textContent || '';
+
+        const noise = ['show thinking', 'gemini said', 'stop response', 'stop generating', 'cancel'];
+
+        function isNoise(t) {
+            const lo = t.toLowerCase().trim();
+            if (!lo) return true;
+            return noise.some(w => lo === w || lo.startsWith(w) || lo.includes(w));
+        }
+
+        const candidates = Array.from(main.querySelectorAll('model-response, .model-response, [data-response-index], .response-container'));
+        let target = null;
+        for (let i = candidates.length - 1; i >= 0; i--) {
+            if (visible(candidates[i])) { target = candidates[i]; break; }
+        }
+
+        if (!target) {
+            const walker = document.createTreeWalker(main, NodeFilter.SHOW_TEXT);
+            const lines = [];
+            while (walker.nextNode()) {
+                const t = (walker.currentNode.nodeValue || '').trim();
+                if (!t || isNoise(t)) continue;
+                const parent = walker.currentNode.parentElement;
+                if (!parent || ['script','style','button','nav','header'].includes(parent.tagName?.toLowerCase())) continue;
+                const pr = parent.getBoundingClientRect();
+                if (pr.width === 0) continue;
+                lines.push(t);
+            }
+            return lines.join('\n');
+        }
+
+        const allTextParts = [];
+        const walker = document.createTreeWalker(target, NodeFilter.SHOW_TEXT);
+        while (walker.nextNode()) {
+            const t = (walker.currentNode.nodeValue || '').trim();
+            if (!t || isNoise(t)) continue;
+            const parent = walker.currentNode.parentElement;
+            if (!parent || ['script','style','button','nav','header'].includes(parent.tagName?.toLowerCase())) continue;
+            if (!visible(parent)) continue;
+            allTextParts.push(t);
+        }
+
+        return allTextParts.join('\n');
     }
-            """
-            text = await page.evaluate(script, selector)
-            if text and str(text).strip():
-                return str(text).strip()
-        except Exception:
-            continue
+    """
+    try:
+        text = await page.evaluate(script)
+        if text and str(text).strip():
+            return str(text).strip()
+    except Exception:
+        pass
     return ""
 
 

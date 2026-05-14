@@ -78,8 +78,8 @@ def _ensure_browser() -> PlaywrightManager:
         config = load_config()
         browser_config = config.get("browser", {})
         _playwright_manager = PlaywrightManager(config)
-        import asyncio
-        asyncio.run(_playwright_manager.start())
+        from subscription_bridge.utils.async_utils import run_async
+        run_async(_playwright_manager.start())
         max_sessions = int(browser_config.get("max_sessions", 3))
         ttl = float(browser_config.get("session_ttl_seconds", 600))
         _session_pool = SessionPool(max_sessions=max_sessions, session_ttl_seconds=ttl)
