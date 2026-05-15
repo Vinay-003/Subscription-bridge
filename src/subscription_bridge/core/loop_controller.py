@@ -30,11 +30,13 @@ class LoopController:
         tool_executor: ToolExecutor,
         planner: Planner,
         max_steps: int = 10,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         self._provider = provider
         self._tool_executor = tool_executor
         self._planner = planner
         self._max_steps = max_steps
+        self._metadata = metadata or {}
 
     async def run(self, state: AgentState) -> RunResult:
         state.start()
@@ -109,6 +111,7 @@ class LoopController:
             run_id=state.run_id,
             prompt=prompt,
             require_json=True,
+            metadata=dict(self._metadata) if self._metadata else None,
         )
         provider_response = await self._provider.send_prompt(request)
 

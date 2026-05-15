@@ -43,6 +43,46 @@ def parse_agent_action(text: str) -> AgentAction:
 def _regex_extract_action(text: str) -> AgentAction | None:
     import re as _re
 
+    def _extract_loose_string_value(source: str, key: str) -> str | None:
+        key_match = _re.search(rf'"{key}"\s*:', source)
+        if not key_match:
+            return None
+        idx = key_match.end()
+        while idx < len(source) and source[idx].isspace():
+            idx += 1
+        if idx >= len(source) or source[idx] != '"':
+            return None
+        idx += 1
+        result: list[str] = []
+        escape_next = False
+        while idx < len(source):
+            ch = source[idx]
+            if escape_next:
+                result.append(ch)
+                escape_next = False
+                idx += 1
+                continue
+            if ch == "\\":
+                result.append(ch)
+                escape_next = True
+                idx += 1
+                continue
+            if ch == '"':
+                look = idx + 1
+                while look < len(source) and source[look].isspace():
+                    look += 1
+                if look >= len(source) or source[look] in (",", "}"):
+                    break
+                result.append('"')
+                idx += 1
+                continue
+            result.append(ch)
+            idx += 1
+        if not result:
+            return None
+        val = "".join(result)
+        return val.replace('\\"', '"').replace("\\n", "\n").replace("\\t", "\t")
+
     if '"type":"final"' in text or '"type": "final"' in text:
         m = _re.search(r'"answer"\s*:\s*"((?:[^"\\]|\\.)*)"', text, _re.DOTALL)
         answer = m.group(1) if m else ""
@@ -68,6 +108,11 @@ def _regex_extract_action(text: str) -> AgentAction | None:
         if m:
             val = m.group(1).replace('\\"', '"').replace("\\n", "\n").replace("\\t", "\t")
             args[key] = val
+            continue
+        if key in ("content", "command", "replace", "search"):
+            loose = _extract_loose_string_value(text, key)
+            if loose is not None:
+                args[key] = loose
 
     return AgentAction(
         action_type="tool_call",

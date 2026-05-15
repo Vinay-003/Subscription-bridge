@@ -4,9 +4,17 @@ from typing import Any
 
 import pytest
 
+import subscription_bridge.providers.gemini.adapter as gemini_adapter
+
 from subscription_bridge.browser.session_pool import SessionPool
 from subscription_bridge.providers import ProviderRequest
-from subscription_bridge.providers.gemini.adapter import GeminiProviderAdapter
+from subscription_bridge.providers.gemini.adapter import (
+    GeminiProviderAdapter,
+    _detect_model_label,
+    _extract_model_variant,
+    _switch_model_variant,
+)
+from subscription_bridge.providers.gemini.response_reader import _clean_assistant_text
 
 
 class FakePage:
@@ -44,6 +52,9 @@ class FakeLocator:
 
     async def is_visible(self) -> bool:
         return True
+
+    async def count(self) -> int:
+        return 1
 
     async def wait_for(self, **kwargs: Any) -> None:
         pass
@@ -116,6 +127,9 @@ class FakeGeminiLocator:
     async def is_visible(self) -> bool:
         return True
 
+    async def count(self) -> int:
+        return 1
+
     async def wait_for(self, **kwargs: Any) -> None:
         pass
 
@@ -156,6 +170,47 @@ class CompleteGeminiPage(FakeGeminiPage):
         if "response" in expr.lower() and "selector" in expr:
             return "latest assistant response from gemini"
         return "test response"
+
+
+class FakeToggleLocator:
+    def __init__(self) -> None:
+        self.clicks = 0
+
+    @property
+    def first(self) -> FakeToggleLocator:
+        return self
+
+    async def is_visible(self) -> bool:
+        return True
+
+    async def count(self) -> int:
+        return 1
+
+    async def click(self) -> None:
+        self.clicks += 1
+
+
+class ModelSwitchPage:
+    def __init__(self, should_click: bool = True) -> None:
+        self.should_click = should_click
+        self.switch_calls: list[list[str]] = []
+        self.locator_calls: list[str] = []
+
+    def locator(self, selector: str) -> FakeToggleLocator:
+        self.locator_calls.append(selector)
+        return FakeToggleLocator()
+
+    async def evaluate(self, expr: str, *args: Any) -> Any:
+        if "aliases" in expr and "menuitem" in expr:
+            if args and isinstance(args[0], list):
+                self.switch_calls.append([str(a) for a in args[0]])
+            return self.should_click
+        if "gemini" in expr.lower():
+            return "Gemini 3 Flash"
+        return 1
+
+    async def keyboard(self) -> None:
+        pass
 
 
 async def gemini_page_factory() -> CompleteGeminiPage:
@@ -231,3 +286,65 @@ async def test_adapter_capabilities() -> None:
     assert "file_upload" in GeminiProviderAdapter.capabilities
     assert "vision" in GeminiProviderAdapter.capabilities
     assert "image_generation" not in GeminiProviderAdapter.capabilities
+
+
+def test_extract_model_variant_from_metadata() -> None:
+    request = ProviderRequest(
+        run_id="test-variant",
+        prompt="hello",
+        metadata={"gemini_model_variant": "Gemini 3 Flash"},
+    )
+    assert _extract_model_variant(request) == "Gemini 3 Flash"
+
+
+def test_extract_model_variant_from_prompt_header() -> None:
+    request = ProviderRequest(
+        run_id="test-variant",
+        prompt="[Model: Gemini 3.1 Pro]\nhello",
+    )
+    assert _extract_model_variant(request) == "Gemini 3.1 Pro"
+
+
+def test_extract_model_variant_from_non_first_line() -> None:
+    request = ProviderRequest(
+        run_id="test-variant",
+        prompt="Conversation:\nUser: hi\n[Model: Gemini 3 Flash]\nUser: sup",
+    )
+    assert _extract_model_variant(request) == "Gemini 3 Flash"
+
+
+@pytest.mark.asyncio
+async def test_switch_model_variant_clicks_menu_and_option() -> None:
+    page = ModelSwitchPage(should_click=True)
+    async def _always(page: Any, labels: list[str], **kwargs: Any) -> bool:
+        return True
+    gemini_adapter.safe_click_labels = _always  # type: ignore[assignment]
+    async def _dismiss(page: Any) -> None:
+        return None
+    gemini_adapter.dismiss_overlays = _dismiss  # type: ignore[assignment]
+    ok = await _switch_model_variant(page, "Gemini 3 Flash")
+    assert ok is True
+
+
+@pytest.mark.asyncio
+async def test_switch_model_variant_fails_when_no_match() -> None:
+    page = ModelSwitchPage(should_click=False)
+    async def _never(page: Any, labels: list[str], **kwargs: Any) -> bool:
+        return False
+    gemini_adapter.safe_click_labels = _never  # type: ignore[assignment]
+    async def _dismiss(page: Any) -> None:
+        return None
+    gemini_adapter.dismiss_overlays = _dismiss  # type: ignore[assignment]
+    ok = await _switch_model_variant(page, "Gemini 3 Flash")
+    assert ok is False
+
+
+@pytest.mark.asyncio
+async def test_detect_model_label_reads_visible_text() -> None:
+    page = ModelSwitchPage(should_click=True)
+    label = await _detect_model_label(page)
+    assert "Gemini" in label
+
+
+def test_clean_assistant_text_filters_stopped_message() -> None:
+    assert _clean_assistant_text("You stopped this response") == ""

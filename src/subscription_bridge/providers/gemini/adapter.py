@@ -30,6 +30,13 @@ from subscription_bridge.providers.gemini.response_reader import (
     wait_for_send_confirmation,
 )
 from subscription_bridge.providers.gemini.upload import UploadError, upload_files
+from subscription_bridge.providers.gemini.selectors import get_selector
+from subscription_bridge.browser.ui_guard import (
+    collect_button_diagnostics,
+    dismiss_overlays,
+    safe_click_labels,
+)
+from subscription_bridge.logging.logger import get_logger
 
 
 class GeminiError(Exception):
@@ -53,9 +60,43 @@ class GeminiProviderAdapter(ProviderAdapter):
         session: TabSession | None = None
         upload_meta: dict[str, Any] | None = None
         prompt = request.prompt
+        logger = get_logger("provider.gemini")
 
         try:
             session = await self._pool.acquire("gemini", request.run_id, self._page_factory)
+
+            requested_variant = _extract_model_variant(request)
+            detected_before = await _detect_model_label(session.page)
+            if requested_variant:
+                logger.info(
+                    "model_switch_requested",
+                    requested=requested_variant,
+                    detected_before=detected_before,
+                    run_id=request.run_id,
+                )
+            if requested_variant and session.selected_model_variant != requested_variant:
+                switched = await _switch_model_variant(session.page, requested_variant)
+                if not switched:
+                    detected_after = await _detect_model_label(session.page)
+                    diagnostics = await collect_button_diagnostics(session.page)
+                    logger.warning(
+                        "model_switch_failed",
+                        requested=requested_variant,
+                        detected_before=detected_before,
+                        detected_after=detected_after,
+                        diagnostics=diagnostics,
+                        run_id=request.run_id,
+                    )
+                    session.selected_model_variant = None
+                session.selected_model_variant = requested_variant
+                detected_after = await _detect_model_label(session.page)
+                logger.info(
+                    "model_switch_done",
+                    requested=requested_variant,
+                    detected_before=detected_before,
+                    detected_after=detected_after,
+                    run_id=request.run_id,
+                )
 
             is_continuation = session.has_active_conversation
 
@@ -120,12 +161,24 @@ class GeminiProviderAdapter(ProviderAdapter):
                     metadata=upload_meta or {},
                 )
 
+            detected_after = await _detect_model_label(session.page)
+            logger.info(
+                "model_used",
+                requested=requested_variant,
+                detected_after=detected_after,
+                run_id=request.run_id,
+            )
+
             session.has_active_conversation = True
 
             return ProviderResponse(
                 provider=self.name, text=text, raw_text=text, success=True,
                 latency_seconds=time.monotonic() - start,
-                metadata=upload_meta or {},
+                metadata={
+                    **(upload_meta or {}),
+                    "requested_model": requested_variant or "",
+                    "detected_model": detected_after,
+                },
             )
 
         except (UploadError, ValueError) as e:
@@ -238,3 +291,131 @@ class GeminiProviderAdapter(ProviderAdapter):
 async def _async_sleep(seconds: float) -> None:
     import asyncio
     await asyncio.sleep(seconds)
+
+
+def _extract_model_variant(request: ProviderRequest) -> str | None:
+    if request.metadata and isinstance(request.metadata, dict):
+        raw = request.metadata.get("gemini_model_variant")
+        if isinstance(raw, str) and raw.strip():
+            return raw.strip()
+
+    prompt = request.prompt or ""
+    for line in prompt.splitlines():
+        line = line.strip()
+        if line.startswith("[Model:") and line.endswith("]"):
+            inner = line[len("[Model:") : -1].strip()
+            if inner:
+                return inner
+    return None
+
+
+def _normalize_variant(name: str) -> str:
+    return " ".join(name.lower().split())
+
+
+def _variant_aliases(name: str) -> list[str]:
+    n = _normalize_variant(name)
+    if "flash" in n:
+        return ["gemini 3 flash", "flash"]
+    if "deep think" in n or "thinking" in n:
+        return ["gemini 3 deep think", "deep think", "thinking"]
+    if "pro" in n:
+        return ["gemini 3.1 pro", "gemini 3 pro", "pro"]
+    return [n]
+
+
+def _variant_select_labels(name: str) -> list[str]:
+    n = _normalize_variant(name)
+    if "flash" in n:
+        return ["gemini 3 flash", "flash", "fast"]
+    if "deep think" in n or "thinking" in n:
+        return ["gemini 3 deep think", "deep think", "thinking"]
+    if "pro" in n:
+        return [
+            "gemini 3.1 pro",
+            "gemini 3 pro",
+            "gemini 2.5 pro",
+            "2.5 pro",
+            "gemini pro",
+            "pro",
+        ]
+    return _variant_aliases(name)
+
+
+async def _switch_model_variant(page: Any, variant: str) -> bool:
+    if not variant:
+        return False
+
+    select_labels = _variant_select_labels(variant)
+    open_labels = ["open mode picker", "mode picker", "model", "gemini"]
+
+    try:
+        loc = page.locator("button[aria-label='Open mode picker']").first
+        if await loc.count() > 0 and await loc.is_visible():
+            await loc.click()
+            await _async_sleep(0.6)
+            if await safe_click_labels(page, select_labels, timeout=5):
+                await _async_sleep(0.6)
+                await dismiss_overlays(page)
+                return True
+    except Exception:
+        pass
+
+    for _ in range(2):
+        opened = await safe_click_labels(page, open_labels, timeout=4)
+        if opened:
+            await _async_sleep(0.8)
+            clicked = await safe_click_labels(page, select_labels, timeout=5)
+            await _async_sleep(0.8)
+            await dismiss_overlays(page)
+            if clicked:
+                return True
+        await _async_sleep(0.4)
+
+    for _ in range(2):
+        for selector in get_selector("model_toggle"):
+            try:
+                loc = page.locator(selector).first
+                if await loc.count() > 0 and await loc.is_visible():
+                    await loc.click()
+                    await _async_sleep(0.8)
+                    clicked = await safe_click_labels(page, select_labels, timeout=5)
+                    await _async_sleep(0.8)
+                    await dismiss_overlays(page)
+                    if clicked:
+                        return True
+                    break
+            except Exception:
+                continue
+        await _async_sleep(0.4)
+
+    return False
+
+
+async def _detect_model_label(page: Any) -> str:
+    script = r"""
+    () => {
+        function visible(el) {
+            if (!el) return false;
+            const r = el.getBoundingClientRect();
+            const s = getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
+        }
+        const nodes = Array.from(document.querySelectorAll('header button, main button, [role="button"]'));
+        for (const n of nodes) {
+            if (!visible(n)) continue;
+            const txt = ((n.getAttribute('aria-label') || '') + ' ' +
+                (n.getAttribute('title') || '') + ' ' +
+                (n.innerText || '') + ' ' + (n.textContent || '')).replace(/\s+/g, ' ').trim();
+            if (!txt) continue;
+            if (/(gemini|flash|pro|think)/i.test(txt)) {
+                return txt.slice(0, 120);
+            }
+        }
+        return '';
+    }
+    """
+    try:
+        return str(await page.evaluate(script) or "")
+    except Exception:
+        return ""

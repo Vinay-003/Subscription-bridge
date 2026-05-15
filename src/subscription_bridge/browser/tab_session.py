@@ -31,6 +31,7 @@ class TabSession:
         self.state: SessionState = SessionState.IDLE
         self.current_run_id: str | None = None
         self.has_active_conversation: bool = False
+        self.selected_model_variant: str | None = None
 
     @property
     def page(self) -> Any:

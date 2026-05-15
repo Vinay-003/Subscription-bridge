@@ -108,6 +108,42 @@ def test_repair_single_quotes() -> None:
         parse_agent_action(text)
 
 
+def test_regex_recovery_file_write_with_unescaped_quotes() -> None:
+    text = (
+        '{\n'
+        '"type": "tool_call",\n'
+        '"thought": "write calculator",\n'
+        '"tool_name": "file_write",\n'
+        '"arguments": {\n'
+        '"path": "calculator.c",\n'
+        '"content": "#include <stdio.h>\\nint main(){\\n    printf("Enter operator: ");\\n    return 0;\\n}"\n'
+        '}\n'
+        '}'
+    )
+    action = parse_agent_action(text)
+    assert action.action_type == "tool_call"
+    assert action.tool_name == "file_write"
+    assert action.arguments["path"] == "calculator.c"
+    assert 'printf("Enter operator: ");' in action.arguments["content"]
+
+
+def test_regex_recovery_bash_command_with_unescaped_quotes() -> None:
+    text = (
+        '{\n'
+        '"type": "tool_call",\n'
+        '"tool_name": "bash",\n'
+        '"arguments": {\n'
+        '"command": "echo "int main(){" > a.c && echo "printf("hi");" >> a.c"\n'
+        '}\n'
+        '}'
+    )
+    action = parse_agent_action(text)
+    assert action.action_type == "tool_call"
+    assert action.tool_name == "bash"
+    assert "echo \"int main(){\" > a.c" in action.arguments["command"]
+    assert 'echo "printf("hi");" >> a.c' in action.arguments["command"]
+
+
 def test_strip_code_fences() -> None:
     result = strip_code_fences("```json\n{\"key\": \"value\"}\n```")
     assert result == '{"key": "value"}'

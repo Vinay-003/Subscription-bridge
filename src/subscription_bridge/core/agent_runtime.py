@@ -96,6 +96,7 @@ class AgentRuntime:
             tool_executor=tool_executor,
             planner=planner,
             max_steps=state.max_steps,
+            metadata=task.metadata,
         )
 
         result = await controller.run(state)

@@ -137,6 +137,49 @@ def test_v1_native_run_still_works(client: TestClient) -> None:
     assert "run_id" in data
 
 
+def test_v1_chat_completion_accepts_workspace(client: TestClient) -> None:
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "subscription-bridge-fake",
+            "messages": [{"role": "user", "content": "hello"}],
+            "workspace": "/tmp",
+        },
+    )
+    assert response.status_code == 200
+
+
+def test_v1_title_generator_short_circuit(client: TestClient) -> None:
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "subscription-bridge-fake",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You are a title generator. You output ONLY a thread title.",
+                },
+                {"role": "user", "content": "sup"},
+            ],
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["choices"][0]["message"]["content"]
+
+
+def test_v1_workspace_from_body(client: TestClient, tmp_path) -> None:
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "subscription-bridge-fake",
+            "messages": [{"role": "user", "content": "hello"}],
+            "workspace": str(tmp_path),
+        },
+    )
+    assert response.status_code == 200
+
+
 def test_v1_tools_accepted_without_execution(client: TestClient) -> None:
     response = client.post(
         "/v1/chat/completions",

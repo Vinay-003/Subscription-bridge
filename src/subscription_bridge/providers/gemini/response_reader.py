@@ -151,6 +151,8 @@ async def extract_latest_assistant_text(page: Any) -> str:
 
 def _clean_assistant_text(text: str) -> str:
     result = text.strip()
+    if result.lower().startswith("you stopped this response"):
+        return ""
     for prefix in ["Gemini said", "Gemini said\n", "Gemini said "]:
         if result.startswith(prefix):
             result = result[len(prefix):].strip()
