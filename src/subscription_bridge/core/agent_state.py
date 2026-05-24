@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
+from subscription_bridge.core.plan import AgentMode, PlanState, TodoStatus
+
 
 class AgentStatus(StrEnum):
     CREATED = "created"
@@ -40,7 +42,7 @@ class Observation:
 
 
 class AgentState:
-    def __init__(self, task: str, workspace: str = ".") -> None:
+    def __init__(self, task: str, workspace: str = ".", mode: AgentMode = AgentMode.ACT) -> None:
         self.run_id: str = f"run-{uuid.uuid4().hex[:12]}"
         self.task: str = task
         self.workspace: str = workspace
@@ -55,6 +57,7 @@ class AgentState:
         self.error: str = ""
         self.clarification_question: str = ""
         self.auto_file_context: str = ""
+        self.plan_state: PlanState = PlanState(mode=mode)
 
     def start(self) -> None:
         self.status = AgentStatus.RUNNING
@@ -115,3 +118,31 @@ class AgentState:
             "error": self.error,
             "elapsed_seconds": round(time.monotonic() - self.created_at, 2),
         }
+
+    def create_plan(self, plan_summary: str, todos: list[dict[str, str]]) -> None:
+        self.plan_state.plan_summary = plan_summary
+        self.plan_state.todos.clear()
+        for todo_data in todos:
+            content = todo_data.get("content", "")
+            details = todo_data.get("details", "")
+            self.plan_state.add_todo(content, details)
+        self.updated_at = time.monotonic()
+
+    def update_todo_status(self, todo_id: str, status: TodoStatus) -> bool:
+        result = self.plan_state.update_todo(todo_id, status)
+        self.updated_at = time.monotonic()
+        return result
+
+    def set_mode(self, mode: AgentMode) -> None:
+        self.plan_state.set_mode(mode)
+        self.updated_at = time.monotonic()
+
+    @property
+    def mode(self) -> AgentMode:
+        return self.plan_state.mode
+
+    def has_plan(self) -> bool:
+        return self.plan_state.total_count > 0
+
+    def get_plan_summary_for_prompt(self) -> str:
+        return self.plan_state.format_for_prompt()

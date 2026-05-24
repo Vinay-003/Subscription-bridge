@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from subscription_bridge.core.agent_state import AgentState
 from subscription_bridge.core.errors import ProviderResponseError
 from subscription_bridge.core.planner import Planner
@@ -41,11 +43,33 @@ class LoopController:
     async def run(self, state: AgentState) -> RunResult:
         state.start()
         state.max_steps = self._max_steps
-        logger.info(RUN_STARTED, run_id=state.run_id, task=state.task)
+        logger.info(RUN_STARTED, run_id=state.run_id, task=state.task, mode=state.mode.value)
 
         try:
             for step in range(1, self._max_steps + 1):
                 action, tool_result = await self._execute_step(state, step)
+
+                if action.action_type == "create_plan":
+                    state.create_plan(action.plan_summary, action.todos)
+                    logger.info(
+                        "plan_created",
+                        run_id=state.run_id,
+                        step=step,
+                        todos=len(action.todos),
+                        summary=action.plan_summary,
+                    )
+                    if state.mode.value == "plan":
+                        state.complete(action.plan_summary)
+                        return RunResult(
+                            success=True,
+                            answer=action.plan_summary,
+                            run_id=state.run_id,
+                            steps=step,
+                            max_steps=self._max_steps,
+                            total_elapsed=state.summary["elapsed_seconds"],
+                            summary=state.summary,
+                        )
+                    continue
 
                 if action.action_type == "final":
                     state.complete(action.answer)
@@ -144,6 +168,28 @@ class LoopController:
         )
 
         result = await self._tool_executor.execute(action.tool_name, action.arguments)
+
+        if action.tool_name == "todo_write" and result.success:
+            todos = result.metadata.get("todos", []) if result.metadata else []
+            for todo_data in todos:
+                todo_id = todo_data.get("id", "")
+                status_str = todo_data.get("status", "pending")
+                if todo_id:
+                    from subscription_bridge.core.plan import TodoStatus
+                    status_map = {
+                        "pending": TodoStatus.PENDING,
+                        "in_progress": TodoStatus.IN_PROGRESS,
+                        "completed": TodoStatus.COMPLETED,
+                        "cancelled": TodoStatus.CANCELLED,
+                    }
+                    status = status_map.get(status_str, TodoStatus.PENDING)
+                    state.update_todo_status(todo_id, status)
+                    logger.info(
+                        "todo_updated",
+                        run_id=state.run_id,
+                        todo_id=todo_id,
+                        status=status_str,
+                    )
 
         safe_output = sanitize_for_log(result.output)
         logger.info(

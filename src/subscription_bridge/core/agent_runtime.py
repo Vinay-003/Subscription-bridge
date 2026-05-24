@@ -73,6 +73,7 @@ class AgentRuntime:
         state = AgentState(
             task=task.text,
             workspace=task.workspace,
+            mode=task.mode,
         )
         state.max_steps = task.max_steps or self._max_steps
 

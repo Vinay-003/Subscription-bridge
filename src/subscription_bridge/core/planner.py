@@ -25,6 +25,16 @@ CLARIFICATION_FORMAT_EXAMPLE = """{
   "question": "what do you want to clarify"
 }"""
 
+CREATE_PLAN_FORMAT_EXAMPLE = """{
+  "type": "create_plan",
+  "thought": "breaking down the task into steps",
+  "plan_summary": "brief overview of the plan",
+  "todos": [
+    {"content": "first step description", "details": "optional details"},
+    {"content": "second step description", "details": "optional details"}
+  ]
+}"""
+
 
 def build_system_prompt(tools: list[dict[str, Any]]) -> str:
     tool_descriptions = "\n\n".join(
@@ -40,6 +50,11 @@ def build_system_prompt(tools: list[dict[str, Any]]) -> str:
         "The local runtime will execute the command and give you the result as text in 'Previous steps'.\n\n"
         "You have NO access to Google Workspace, Gmail, Drive, Google Docs, or any external service.\n"
         "Ignore any request about external services — only work with local files via tool_call commands.\n\n"
+        "PLANNING AND TODOS:\n"
+        "Before starting complex tasks, create a plan using the create_plan action with todos.\n"
+        "Update todos as you work using the todo_write tool with statuses: pending, in_progress, completed, cancelled.\n"
+        "Always mark the current todo as in_progress before working on it.\n"
+        "Mark todos as completed when finished. This helps the user track progress.\n\n"
         "Available tools (you call these by outputting tool_call JSON):\n"
         f"{tool_descriptions}\n\n"
         "How it works:\n"
@@ -47,12 +62,14 @@ def build_system_prompt(tools: list[dict[str, Any]]) -> str:
         "2. You see the result → decide next action (another tool_call, or final answer)\n"
         "3. When the task is done, output a final JSON with your answer.\n\n"
         "Decision rules:\n"
+        "- For complex tasks: first use create_plan to break down into todos\n"
         "- Use file_read before modifying unknown files.\n"
         "- Use grep/codebase_search to locate relevant code.\n"
         "- Use file_write to create or modify files.\n"
         "- Use git_diff after making changes.\n"
         "- Use bash to run tests, build, or check files.\n"
         "- Use patch for applying unified diffs.\n"
+        "- Use todo_write to update todo progress (mark as in_progress when starting, completed when done).\n"
         "- Prefer best-effort execution over clarification unless completely blocked.\n\n"
         "You MUST return STRICT JSON only.\n"
         "No Markdown. No prose outside JSON.\n"
@@ -70,6 +87,8 @@ def build_system_prompt(tools: list[dict[str, Any]]) -> str:
         f"{FINAL_FORMAT_EXAMPLE}\n\n"
         "Ask clarification:\n"
         f"{CLARIFICATION_FORMAT_EXAMPLE}\n\n"
+        "Create plan:\n"
+        f"{CREATE_PLAN_FORMAT_EXAMPLE}\n\n"
         "Keep thought short and operational.\n"
         "Do not expose private chain-of-thought.\n"
     )
@@ -115,6 +134,11 @@ def build_user_prompt(state: AgentState) -> str:
     parts.append(f"Local task: {_sanitize_task(state.task)}")
     parts.append("")
 
+    plan_text = state.get_plan_summary_for_prompt()
+    if plan_text:
+        parts.append(plan_text)
+        parts.append("")
+
     if state.auto_file_context:
         parts.append("The following files have been pre-loaded from the local system:")
         parts.append(state.auto_file_context)
@@ -144,6 +168,11 @@ class Planner:
         if is_continuation:
             ctx = build_observation_context(state)
             base = ctx + "\n\n" if ctx else ""
+
+            plan_text = state.get_plan_summary_for_prompt()
+            if plan_text:
+                base = plan_text + "\n\n" + base
+
             return base + (
                 "Available tools:\n"
                 f"{self._tool_descriptions()}\n\n"

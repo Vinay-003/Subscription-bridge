@@ -307,6 +307,13 @@ def _resolve_workspace(req: ChatCompletionRequest, request: Request) -> tuple[st
     return os.path.abspath("."), "default"
 
 
+def _resolve_mode(request: Request) -> str:
+    mode_header = request.headers.get("x-opencode-mode", "").lower()
+    if mode_header in ["plan", "act"]:
+        return mode_header
+    return "act"
+
+
 def _is_title_generator_request(req: ChatCompletionRequest) -> bool:
     for msg in req.messages:
         if msg.role != "system" or not isinstance(msg.content, str):
@@ -462,6 +469,7 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
 
     if provider_adapter is not None and provider_adapter.name == "gemini" and has_tools:
         from subscription_bridge.core import AgentRuntime, Task
+        from subscription_bridge.core.plan import AgentMode
 
         dep_tool_registry = deps.get_tool_registry()
         runtime = AgentRuntime(
@@ -485,6 +493,10 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
         variant = _gemini_model_variant(req.model)
         if variant:
             task_text = _with_model_hint(task_text, variant)
+
+        mode_str = _resolve_mode(request)
+        mode = AgentMode.PLAN if mode_str == "plan" else AgentMode.ACT
+
         task = Task(
             text=task_text,
             workspace=resolved_workspace,
@@ -495,6 +507,7 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
                 if _strip_provider_prefix(req.model) in GEMINI_MODELS
                 else None,
             },
+            mode=mode,
         )
         workspace_lock = await _get_workspace_lock(resolved_workspace)
         async with workspace_lock:

@@ -10,6 +10,7 @@ from subscription_bridge.tools.glob import GlobTool
 from subscription_bridge.tools.grep import GrepTool
 from subscription_bridge.tools.patch import PatchTool
 from subscription_bridge.tools.registry import ToolRegistry
+from subscription_bridge.tools.todo_write import TodoWriteTool
 
 __all__ = [
     "Tool",
@@ -26,4 +27,5 @@ __all__ = [
     "PatchTool",
     "CodebaseSearchTool",
     "GlobTool",
+    "TodoWriteTool",
 ]

@@ -12,6 +12,7 @@ from subscription_bridge.core.errors import (
 )
 from subscription_bridge.core.loop_controller import LoopController
 from subscription_bridge.core.message import Message
+from subscription_bridge.core.plan import AgentMode, PlanState, TodoItem, TodoStatus
 from subscription_bridge.core.planner import Planner, build_system_prompt, build_user_prompt
 from subscription_bridge.core.run_manager import RunResult
 from subscription_bridge.core.task import Task
@@ -37,4 +38,8 @@ __all__ = [
     "RunResult",
     "Task",
     "Message",
+    "AgentMode",
+    "PlanState",
+    "TodoItem",
+    "TodoStatus",
 ]

@@ -15,6 +15,28 @@ from subscription_bridge.utils.security import sanitize_for_log
 logger = get_logger(__name__)
 
 
+def _get_workspace_from_pwd() -> str | None:
+    try:
+        proc = subprocess.run(
+            ["bash", "-lc", "pwd"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    resolved = (proc.stdout or "").strip()
+    if not resolved:
+        return None
+    resolved = os.path.abspath(os.path.expanduser(resolved))
+    if os.path.isdir(resolved):
+        return resolved
+    return None
+
+
 def _workspace_from_opencode_active_session() -> str | None:
     data_home = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
     db_path = os.environ.get("OPENCODE_DB_PATH", os.path.join(data_home, "opencode", "opencode.db"))
@@ -47,33 +69,6 @@ def _workspace_from_opencode_active_session() -> str | None:
             pass
 
 
-def _workspace_from_pwd(candidate_workspace: str | None) -> str | None:
-    if not candidate_workspace:
-        return None
-    if not os.path.isdir(candidate_workspace):
-        return None
-    try:
-        proc = subprocess.run(
-            ["bash", "-lc", "pwd"],
-            cwd=candidate_workspace,
-            capture_output=True,
-            text=True,
-            timeout=2,
-            check=False,
-        )
-    except Exception:
-        return None
-    if proc.returncode != 0:
-        return None
-    resolved = (proc.stdout or "").strip()
-    if not resolved:
-        return None
-    resolved = os.path.abspath(os.path.expanduser(resolved))
-    if os.path.isdir(resolved):
-        return resolved
-    return None
-
-
 class ToolExecutor:
     def __init__(self, registry: ToolRegistry, workspace: str = ".") -> None:
         self._registry = registry
@@ -89,28 +84,25 @@ class ToolExecutor:
                 error=str(e),
             )
 
-        augmented = dict(arguments)
-        if "workspace" not in augmented:
-            base_workspace = self._workspace
-            if base_workspace and os.path.isdir(base_workspace):
-                augmented["workspace"] = base_workspace
-            else:
-                dynamic_workspace = _workspace_from_opencode_active_session()
-                if dynamic_workspace:
-                    augmented["workspace"] = dynamic_workspace
-                    logger.info("tool_workspace_refreshed", old_workspace=self._workspace, workspace=dynamic_workspace)
-                else:
-                    augmented["workspace"] = self._workspace
-
-        verified_workspace = _workspace_from_pwd(augmented.get("workspace"))
-        if verified_workspace:
-            if verified_workspace != augmented.get("workspace"):
+        pwd_workspace = _get_workspace_from_pwd()
+        if pwd_workspace:
+            augmented = dict(arguments)
+            augmented["workspace"] = pwd_workspace
+            if pwd_workspace != self._workspace:
                 logger.info(
-                    "tool_workspace_verified",
-                    original_workspace=augmented.get("workspace"),
-                    verified_workspace=verified_workspace,
+                    "tool_workspace_from_pwd",
+                    configured_workspace=self._workspace,
+                    pwd_workspace=pwd_workspace,
+                    tool=tool_name,
                 )
-            augmented["workspace"] = verified_workspace
+        else:
+            augmented = dict(arguments)
+            dynamic_workspace = _workspace_from_opencode_active_session()
+            if dynamic_workspace:
+                augmented["workspace"] = dynamic_workspace
+                logger.info("tool_workspace_refreshed", old_workspace=self._workspace, workspace=dynamic_workspace)
+            else:
+                augmented["workspace"] = self._workspace
 
         logger.info(TOOL_CALLED, tool=tool_name, args=sanitize_for_log(augmented))
 

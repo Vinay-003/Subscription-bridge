@@ -17,6 +17,7 @@ from subscription_bridge.tools import (
     GlobTool,
     GrepTool,
     PatchTool,
+    TodoWriteTool,
     ToolRegistry,
 )
 from subscription_bridge.utils.config import load_config
@@ -52,6 +53,7 @@ class AppDependencies:
         r.register(PatchTool())
         r.register(GlobTool())
         r.register(CodebaseSearchTool())
+        r.register(TodoWriteTool())
         return r
 
     async def ensure_browser(self) -> None:

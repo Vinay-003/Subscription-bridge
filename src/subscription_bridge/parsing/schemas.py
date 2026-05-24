@@ -45,6 +45,20 @@ class AskClarificationAction(BaseModel):
         return v
 
 
+class CreatePlanAction(BaseModel):
+    type: str = "create_plan"
+    thought: str = ""
+    plan_summary: str = ""
+    todos: list[dict[str, str]] = []
+
+    @field_validator("type")
+    @classmethod
+    def validate_type(cls, v: str) -> str:
+        if v != "create_plan":
+            raise ValueError(f"Expected 'create_plan', got {v!r}")
+        return v
+
+
 class AgentAction(BaseModel):
     action_type: str
     thought: str = ""
@@ -52,6 +66,8 @@ class AgentAction(BaseModel):
     arguments: dict[str, Any] = {}
     answer: str = ""
     question: str = ""
+    plan_summary: str = ""
+    todos: list[dict[str, str]] = []
 
     @classmethod
     def from_tool_call(cls, data: dict[str, Any]) -> AgentAction:
@@ -82,6 +98,16 @@ class AgentAction(BaseModel):
         )
 
     @classmethod
+    def from_create_plan(cls, data: dict[str, Any]) -> AgentAction:
+        validated = CreatePlanAction(**data)
+        return cls(
+            action_type="create_plan",
+            thought=validated.thought,
+            plan_summary=validated.plan_summary,
+            todos=validated.todos,
+        )
+
+    @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AgentAction:
         action_type = data.get("type", "")
         if action_type == "tool_call":
@@ -90,5 +116,7 @@ class AgentAction(BaseModel):
             return cls.from_final(data)
         if action_type == "ask_clarification":
             return cls.from_clarification(data)
-        valid_types = ["tool_call", "final", "ask_clarification"]
+        if action_type == "create_plan":
+            return cls.from_create_plan(data)
+        valid_types = ["tool_call", "final", "ask_clarification", "create_plan"]
         raise ValueError(f"Unknown action type {action_type!r}. Expected one of {valid_types}")
