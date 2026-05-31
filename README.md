@@ -39,7 +39,7 @@ flowchart TB
     TO["Tools<br/>file_read, grep, bash, etc."]
     PR["ProviderRouter<br/>route by capability"]
     GP["GeminiProviderAdapter<br/>text + file upload"]
-    CP["ChatGPTAdapter<br/>(future)"]
+    CP["ChatGPTProviderAdapter<br/>text + code reasoning"]
     CL["ClaudeAdapter<br/>(future)"]
     BR["Browser Runtime<br/>Playwright, SessionPool, Selectors"]
     GW["Gemini Web UI"]
@@ -51,9 +51,10 @@ flowchart TB
     AR --> TO
     AR --> PR
     PR --> GP
-    PR -.-> CP
+    PR --> CP
     PR -.-> CL
     GP --> BR
+    CP --> BR
     BR --> GW
 
     subgraph future ["Future (Phase 9+)"]
@@ -123,6 +124,40 @@ chmod +x ~/start-bridge.sh
 
 This starts Chrome + the bridge server. Then open OpenCode Desktop and select a Gemini model.
 
+---
+
+## Setup Browser for ChatGPT
+
+### CDP Mode
+
+```bash
+google-chrome \
+  --remote-debugging-port=9333 \
+  --user-data-dir="$HOME/.subscription-bridge/chrome-profile" \
+  --no-first-run \
+  --no-default-browser-check
+```
+
+Then navigate to https://chatgpt.com and log in **once**. Login persists in the profile.
+
+### Start with ChatGPT
+
+```bash
+bridge server --provider chatgpt
+```
+
+Or let the server prompt you:
+
+```bash
+bridge server
+# ? Which provider do you want to use?
+#   1) Gemini
+#   2) ChatGPT
+#   3) Both
+```
+
+In OpenCode, select the `subscription-bridge-chatgpt` model.
+
 ### Verify
 
 ```bash
@@ -163,12 +198,13 @@ curl -N -X POST http://127.0.0.1:8787/v1/chat/completions \
 
 Available models:
 
-| Model ID | Backend | Context | Requires Browser |
-|----------|---------|---------|-----------------|
-| `subscription-bridge-fake` | FakeProviderAdapter | 32K | No |
-| `subscription-bridge-gemini-fast` | Gemini 3 Flash | 1M | Yes |
-| `subscription-bridge-gemini-thinking` | Gemini 3 Deep Think | 192K | Yes |
-| `subscription-bridge-gemini-pro` | Gemini 3.1 Pro | 1M | Yes |
+| Model ID | Backend | Context | Output | Requires Browser |
+|----------|---------|---------|--------|-----------------|
+| `subscription-bridge-fake` | FakeProviderAdapter | 32K | 8K | No |
+| `subscription-bridge-gemini-fast` | Gemini 3 Flash | 1M | 8K | Yes |
+| `subscription-bridge-gemini-thinking` | Gemini 3 Deep Think | 192K | 64K | Yes |
+| `subscription-bridge-gemini-pro` | Gemini 3.1 Pro | 1M | 64K | Yes |
+| `subscription-bridge-chatgpt` | ChatGPT (GPT-4o) | 128K | 16K | Yes |
 
 ### File / Image Upload
 
@@ -200,7 +236,8 @@ See [docs/opencode.md](docs/opencode.md) for OpenCode configuration.
 |---------|-------------|--------|
 | `bridge ask <prompt>` | Send a prompt to a provider | ✅ Phase 1 |
 | `bridge run <task>` | Run the agent tool loop | ✅ Phase 4 |
-| `bridge server` | Start the local API server | ✅ Phase 7 |
+| `bridge server` | Start the local API server (prompts for provider) | ✅ Phase 7 |
+| `bridge stop` | Stop the running server | ✅ |
 | `bridge provider list` | List configured providers | ✅ Phase 1 |
 | `bridge provider health <name>` | Check provider health | ✅ Phase 1+3 |
 | `bridge session list` | Show active browser sessions | ✅ Phase 2 |
@@ -252,6 +289,7 @@ API docs: http://127.0.0.1:8787/docs
 | ProviderAdapter interface | `providers/base.py` | Abstract provider contract |
 | FakeProviderAdapter | `providers/fake.py` | Deterministic test provider |
 | GeminiProviderAdapter | `providers/gemini/adapter.py` | Gemini text + file prompting |
+| ChatGPTProviderAdapter | `providers/chatgpt/adapter.py` | ChatGPT text + code reasoning |
 | Prompt IO | `providers/gemini/prompt_io.py` | Prompt insertion with integrity check |
 | Response Reader | `providers/gemini/response_reader.py` | Response extraction |
 | Upload | `providers/gemini/upload.py` | File upload via Playwright |
@@ -305,7 +343,7 @@ API docs: http://127.0.0.1:8787/docs
 - **Rate limits still apply**: The provider's own rate limits are not bypassed. Throttling is the user's responsibility.
 - **Slower than API calls**: Browser automation is inherently slower than direct API calls due to page loads, DOM waits, and UI interactions.
 - **Hash embeddings**: The default embedding provider (hash-based) is deterministic and requires no model downloads, but is not as accurate as Sentence Transformers or other neural models.
-- **Gemini-specific**: Currently only Gemini and the fake test provider are implemented. ChatGPT and Claude adapters are future work.
+- **Gemini and ChatGPT supported**: Both Gemini and ChatGPT are implemented as browser-based providers. Claude adapter is future work.
 - **E2E tests require manual browser**: Real provider tests cannot run in CI without manual login.
 - **Single-user**: The API server is designed for local use. No authentication, rate limiting, or multi-tenancy.
 
@@ -315,7 +353,7 @@ API docs: http://127.0.0.1:8787/docs
 
 | Phase | Feature | Status |
 |-------|---------|--------|
-| ChatGPT provider adapter | ⬜ Planned |
+| ChatGPT provider adapter | ✅ Done |
 | Claude provider adapter | ⬜ Planned |
 | Stronger semantic embeddings (SentenceTransformer default) | ⬜ Planned |
 | Tree-sitter syntax-aware chunking | ⬜ Planned |

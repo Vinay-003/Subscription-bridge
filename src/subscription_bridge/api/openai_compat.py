@@ -36,24 +36,40 @@ _workspace_locks: dict[str, asyncio.Lock] = {}
 _workspace_locks_guard = asyncio.Lock()
 
 MODEL_FAKE = "subscription-bridge-fake"
-MODEL_GEMINI_FAST = "subscription-bridge-gemini-fast"
-MODEL_GEMINI_THINKING = "subscription-bridge-gemini-thinking"
+MODEL_GEMINI_FLASH = "subscription-bridge-gemini-flash"
+MODEL_GEMINI_FLASH_LITE = "subscription-bridge-gemini-flash-lite"
 MODEL_GEMINI_PRO = "subscription-bridge-gemini-pro"
+MODEL_CHATGPT = "subscription-bridge-chatgpt"
+MODEL_CHATGPT_THINKING = "subscription-bridge-chatgpt-thinking"
+MODEL_CHATGPT_PRO = "subscription-bridge-chatgpt-pro"
 
-GEMINI_MODELS = {MODEL_GEMINI_FAST, MODEL_GEMINI_THINKING, MODEL_GEMINI_PRO}
+# Backward-compatible model aliases
+MODEL_ALIASES: dict[str, str] = {
+    "subscription-bridge-gemini-fast": MODEL_GEMINI_FLASH,
+    "subscription-bridge-gemini-thinking": MODEL_GEMINI_PRO,
+}
+
+GEMINI_MODELS = {MODEL_GEMINI_FLASH, MODEL_GEMINI_FLASH_LITE, MODEL_GEMINI_PRO}
+CHATGPT_MODELS = {MODEL_CHATGPT, MODEL_CHATGPT_THINKING, MODEL_CHATGPT_PRO}
 
 MODEL_CONTEXT_LIMITS: dict[str, int] = {
     MODEL_FAKE: 32000,
-    MODEL_GEMINI_FAST: 1_000_000,
-    MODEL_GEMINI_THINKING: 192_000,
+    MODEL_GEMINI_FLASH: 1_000_000,
+    MODEL_GEMINI_FLASH_LITE: 1_000_000,
     MODEL_GEMINI_PRO: 1_000_000,
+    MODEL_CHATGPT: 128_000,
+    MODEL_CHATGPT_THINKING: 128_000,
+    MODEL_CHATGPT_PRO: 128_000,
 }
 
 MODEL_OUTPUT_LIMITS: dict[str, int] = {
     MODEL_FAKE: 8192,
-    MODEL_GEMINI_FAST: 8192,
-    MODEL_GEMINI_THINKING: 65536,
+    MODEL_GEMINI_FLASH: 8192,
+    MODEL_GEMINI_FLASH_LITE: 8192,
     MODEL_GEMINI_PRO: 65536,
+    MODEL_CHATGPT: 16384,
+    MODEL_CHATGPT_THINKING: 16384,
+    MODEL_CHATGPT_PRO: 16384,
 }
 
 TOOL_CALL_SYSTEM_PROMPT = (
@@ -74,8 +90,14 @@ def _get_deps(request: Request) -> AppDependencies:
 def _build_models() -> list[OpenAIModel]:
     models = [OpenAIModel(id=MODEL_FAKE, owned_by="subscription-bridge")]
     if importlib.util.find_spec("subscription_bridge.providers.gemini"):
-        for mid in [MODEL_GEMINI_FAST, MODEL_GEMINI_THINKING, MODEL_GEMINI_PRO]:
+        for mid in [MODEL_GEMINI_FLASH, MODEL_GEMINI_FLASH_LITE, MODEL_GEMINI_PRO]:
             models.append(OpenAIModel(id=mid, owned_by="subscription-bridge"))
+    if importlib.util.find_spec("subscription_bridge.providers.chatgpt"):
+        for mid in [MODEL_CHATGPT, MODEL_CHATGPT_THINKING, MODEL_CHATGPT_PRO]:
+            models.append(OpenAIModel(id=mid, owned_by="subscription-bridge"))
+    for alias, canonical in MODEL_ALIASES.items():
+        if any(m.id == canonical for m in models):
+            models.append(OpenAIModel(id=alias, owned_by="subscription-bridge"))
     return models
 
 
@@ -132,11 +154,24 @@ def _check_context_limit(req: ChatCompletionRequest) -> JSONResponse | None:
 
 def _gemini_model_variant(model_id: str) -> str:
     mapping = {
-        MODEL_GEMINI_FAST: "Gemini 3 Flash",
-        MODEL_GEMINI_THINKING: "Gemini 3 Deep Think",
-        MODEL_GEMINI_PRO: "Gemini 3.1 Pro",
+        MODEL_GEMINI_FLASH: "3.5 Flash",
+        MODEL_GEMINI_FLASH_LITE: "3.1 Flash-Lite",
+        MODEL_GEMINI_PRO: "3.1 Pro",
     }
-    return mapping.get(_strip_provider_prefix(model_id), "Gemini 3 Flash")
+    return mapping.get(_strip_provider_prefix(model_id), "3.5 Flash")
+
+
+def _gemini_thinking_enabled(model_id: str) -> bool:
+    return False
+
+
+def _chatgpt_model_variant(model_id: str) -> str:
+    mapping = {
+        MODEL_CHATGPT: "Instant",
+        MODEL_CHATGPT_THINKING: "Thinking",
+        MODEL_CHATGPT_PRO: "Pro",
+    }
+    return mapping.get(_strip_provider_prefix(model_id), "Instant")
 
 
 def _with_model_hint(prompt: str, variant: str) -> str:
@@ -144,16 +179,6 @@ def _with_model_hint(prompt: str, variant: str) -> str:
     if not prompt:
         return header
     return f"{header}\n{prompt}"
-
-
-def _resolve_agent_answer(result: Any) -> str:
-    if result.answer:
-        return result.answer
-    if result.needs_clarification and result.question:
-        return result.question
-    if result.error:
-        return f"Error: {result.error}"
-    return "No answer generated"
 
 
 def _conversation_id(messages: list[Any]) -> str:
@@ -349,6 +374,13 @@ async def _get_workspace_lock(workspace: str) -> asyncio.Lock:
         return lock
 
 
+def _resolve_model_alias(model_id: str) -> str:
+    stripped = _strip_provider_prefix(model_id)
+    if stripped in MODEL_ALIASES:
+        return MODEL_ALIASES[stripped]
+    return model_id
+
+
 async def _resolve_adapter(model_id: str, deps: AppDependencies) -> Any | None:
     model = _strip_provider_prefix(model_id)
     if model == MODEL_FAKE:
@@ -356,6 +388,11 @@ async def _resolve_adapter(model_id: str, deps: AppDependencies) -> Any | None:
     if model in GEMINI_MODELS:
         try:
             return await deps.get_gemini_adapter()
+        except Exception:
+            return None
+    if model in CHATGPT_MODELS:
+        try:
+            return await deps.get_chatgpt_adapter()
         except Exception:
             return None
     return None
@@ -401,6 +438,8 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
     except Exception as e:
         log.warning("chat_completions_parse_error", error=str(e))
         return _error_json(str(e), code="invalid_request_error", status_code=422)
+
+    req.model = _resolve_model_alias(req.model)
 
     ctx_error = _check_context_limit(req)
     if ctx_error is not None:
@@ -458,79 +497,19 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
             "gemini_model_variant": _gemini_model_variant(req.model)
             if _strip_provider_prefix(req.model) in GEMINI_MODELS
             else None,
+            "gemini_thinking": _gemini_thinking_enabled(req.model),
+            "chatgpt_model_variant": _chatgpt_model_variant(req.model)
+            if _strip_provider_prefix(req.model) in CHATGPT_MODELS
+            else None,
         },
     )
 
-    if req.stream and provider_adapter is not None and provider_adapter.name != "gemini":
+    if req.stream:
         return StreamingResponse(
             _stream_response(provider_adapter, provider_req, req.model),
             media_type="text/event-stream",
         )
 
-    if provider_adapter is not None and provider_adapter.name == "gemini" and has_tools:
-        from subscription_bridge.core import AgentRuntime, Task
-        from subscription_bridge.core.plan import AgentMode
-
-        dep_tool_registry = deps.get_tool_registry()
-        runtime = AgentRuntime(
-            provider=provider_adapter,
-            tool_registry=dep_tool_registry,
-            max_steps=25,
-        )
-        last_text = ""
-        for msg in reversed(req.messages):
-            if isinstance(msg.content, str):
-                last_text = msg.content
-                break
-            if isinstance(msg.content, list):
-                for part in msg.content:
-                    if isinstance(part, dict) and part.get("type") == "text":
-                        last_text = part.get("text", "") or ""
-                        break
-                if last_text:
-                    break
-        task_text = last_text or prompt
-        variant = _gemini_model_variant(req.model)
-        if variant:
-            task_text = _with_model_hint(task_text, variant)
-
-        mode_str = _resolve_mode(request)
-        mode = AgentMode.PLAN if mode_str == "plan" else AgentMode.ACT
-
-        task = Task(
-            text=task_text,
-            workspace=resolved_workspace,
-            provider="gemini",
-            max_steps=25,
-            metadata={
-                "gemini_model_variant": _gemini_model_variant(req.model)
-                if _strip_provider_prefix(req.model) in GEMINI_MODELS
-                else None,
-            },
-            mode=mode,
-        )
-        workspace_lock = await _get_workspace_lock(resolved_workspace)
-        async with workspace_lock:
-            result = await runtime.run(task)
-        answer = _resolve_agent_answer(result)
-
-        if req.stream:
-            return StreamingResponse(
-                _stream_agent_answer(answer, req.model),
-                media_type="text/event-stream",
-            )
-
-        return ChatCompletionResponse(
-            id=f"chatcmpl-{uuid.uuid4().hex[:12]}", created=int(time.time()), model=req.model,
-            choices=[Choice(index=0, message=ResponseMessage(role="assistant", content=answer), finish_reason="stop")],
-            usage=Usage(
-                prompt_tokens=_estimate_tokens(prompt),
-                completion_tokens=_estimate_tokens(answer),
-                total_tokens=_estimate_tokens(prompt) + _estimate_tokens(answer),
-            ),
-        )
-
-    # Non-Gemini providers (fake) use direct send_prompt
     response = await provider_adapter.send_prompt(provider_req)
     _cleanup_temp_files(attachments)
 
@@ -734,32 +713,6 @@ async def _stream_response(
             yield f"data: {content_chunk.model_dump_json()}\n\n"
             await asyncio.sleep(0.01)
 
-    stop_chunk = ChatCompletionChunk(
-        id=completion_id, created=now, model=model,
-        choices=[ChoiceDelta(index=0, delta=DeltaMessage(), finish_reason="stop")],
-    )
-    yield f"data: {stop_chunk.model_dump_json()}\n\n"
-    yield "data: [DONE]\n\n"
-
-
-async def _stream_agent_answer(answer: str, model: str) -> AsyncGenerator[str, None]:
-    completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
-    now = int(time.time())
-    role_chunk = ChatCompletionChunk(
-        id=completion_id, created=now, model=model,
-        choices=[ChoiceDelta(index=0, delta=DeltaMessage(role="assistant"), finish_reason=None)],
-    )
-    yield f"data: {role_chunk.model_dump_json()}\n\n"
-    if answer:
-        chunk_size = max(len(answer) // 10, 5)
-        for i in range(0, len(answer), chunk_size):
-            chunk_text = answer[i:i + chunk_size]
-            content_chunk = ChatCompletionChunk(
-                id=completion_id, created=now, model=model,
-                choices=[ChoiceDelta(index=0, delta=DeltaMessage(content=chunk_text), finish_reason=None)],
-            )
-            yield f"data: {content_chunk.model_dump_json()}\n\n"
-            await asyncio.sleep(0.01)
     stop_chunk = ChatCompletionChunk(
         id=completion_id, created=now, model=model,
         choices=[ChoiceDelta(index=0, delta=DeltaMessage(), finish_reason="stop")],

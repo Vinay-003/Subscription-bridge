@@ -89,6 +89,7 @@ class PlaywrightManager:
             "--disable-dev-shm-usage",
             "--disable-web-security",
             "--start-maximized",
+            "--disable-session-crashed-bubble",
         ]
 
         launch_opts: dict[str, Any] = {

@@ -1,44 +1,74 @@
 # ChatGPT Web UI Selectors
 provider: chatgpt
-url: "https://chat.openai.com"
+url: "https://chatgpt.com"
 
 selectors:
   composer:
-    - "textarea[aria-label*='message']"
+    - "#prompt-textarea"
+    - "textarea[data-testid='prompt-textarea']"
+    - "[data-testid='composer'] textarea"
+    - "[data-testid='composer'] [contenteditable='true']"
+    - "div.ProseMirror[contenteditable='true']"
+    - "main form textarea"
+    - "main form [contenteditable='true']"
+    - "main div[contenteditable='true']"
     - "textarea"
-    - "div[contenteditable='true']"
 
   new_chat_buttons:
-    - "button[aria-label*='New chat']"
     - "a[href='/']"
+    - "nav a[href='/']"
 
   model_response:
     - "[data-message-author-role='assistant']"
     - ".markdown"
     - ".prose"
+    - "article"
+    - "[data-testid*='conversation-turn']"
 
   progress_indicators:
-    - "[role='status']"
-    - ".typing-indicator"
-    - ".thinking"
+    - "[role='progressbar']"
+    - "[class*='spinner']"
+    - "[class*='loading']"
+    - "[class*='typing']"
 
   send_buttons:
     - "button[data-testid='send-button']"
+    - "button[aria-label*='Send']"
+    - "button[type='submit']"
+
+  stop_buttons:
+    - "button[aria-label*='Stop']"
+    - "button[data-testid='stop-button']"
 
   file_input:
     - "input[type='file']"
 
+  attach_buttons:
+    - "button[aria-label*='Attach']"
+    - "button[aria-label*='Add photos']"
+    - "button[aria-label*='Add files']"
+
+  model_toggle:
+    - "button[data-testid='model-switcher']"
+    - "button[aria-label*='model']"
+
 unsafe_click_words:
+  - "share conversation"
   - "share"
-  - "delete"
   - "rename"
+  - "delete"
+  - "remove"
+  - "archive"
   - "settings"
   - "help"
   - "upgrade"
   - "logout"
+  - "temporary chat"
 
 timeouts:
   default: 30000
   composer: 30000
   navigation: 60000
+  generation: 300000
   send_confirm: 35000
+  download: 180000

@@ -4,7 +4,7 @@
 
 SubscriptionBridge exposes an OpenAI-compatible API at `/v1` so that
 [OpenCode](https://opencode.ai) and other OpenAI-compatible clients can use
-browser-based LLMs (Gemini) through SubscriptionBridge.
+browser-based LLMs (Gemini, ChatGPT) through SubscriptionBridge.
 
 **Architecture when connected to OpenCode:**
 
@@ -35,6 +35,7 @@ Add the following to your OpenCode configuration (e.g., `~/.config/opencode/open
           "name": "SubscriptionBridge Fake",
           "limit": { "context": 32000, "output": 8192 }
         },
+
         "subscription-bridge-gemini-fast": {
           "name": "Gemini 3 Flash",
           "limit": { "context": 1000000, "output": 8192 },
@@ -48,6 +49,12 @@ Add the following to your OpenCode configuration (e.g., `~/.config/opencode/open
         "subscription-bridge-gemini-pro": {
           "name": "Gemini 3.1 Pro",
           "limit": { "context": 1000000, "output": 65536 },
+          "modalities": { "input": ["text", "image"], "output": ["text"] }
+        },
+
+        "subscription-bridge-chatgpt": {
+          "name": "ChatGPT",
+          "limit": { "context": 128000, "output": 16384 },
           "modalities": { "input": ["text", "image"], "output": ["text"] }
         }
       }
@@ -71,7 +78,7 @@ Recommended to include with OpenCode:
 ```
 
 OpenCode manages context and session history. Each request to SubscriptionBridge
-uses a fresh Gemini chat or guaranteed reset. OpenCode is the source of truth.
+uses a fresh chat or guaranteed reset. OpenCode is the source of truth.
 
 ---
 
@@ -80,12 +87,12 @@ uses a fresh Gemini chat or guaranteed reset. OpenCode is the source of truth.
 OpenCode can use different models for different agent types.
 Recommended configuration:
 
-| Agent Role  | Recommended Model                   |
-|-------------|--------------------------------------|
-| `build`     | `subscription-bridge-gemini-pro`     |
-| `plan`      | `subscription-bridge-gemini-thinking` |
-| `explore`   | `subscription-bridge-gemini-fast`    |
-| `review`    | `subscription-bridge-gemini-pro`     |
+| Agent Role  | Gemini Option                      | ChatGPT Option                   |
+|-------------|------------------------------------|----------------------------------|
+| `build`     | `subscription-bridge-gemini-pro`   | `subscription-bridge-chatgpt`    |
+| `plan`      | `subscription-bridge-gemini-thinking` | `subscription-bridge-chatgpt` |
+| `explore`   | `subscription-bridge-gemini-fast`  | `subscription-bridge-chatgpt`    |
+| `review`    | `subscription-bridge-gemini-pro`   | `subscription-bridge-chatgpt`    |
 
 SubscriptionBridge does not implement subagents. OpenCode manages agents.
 
@@ -93,43 +100,73 @@ SubscriptionBridge does not implement subagents. OpenCode manages agents.
 
 ## Setup Steps
 
+### Option A: Gemini
+
 ```bash
-# 1. Start the SubscriptionBridge server
-bridge server --host 127.0.0.1 --port 8787
-
-# 2. Verify models
-curl http://127.0.0.1:8787/v1/models
-
-# 3. Test with fake provider
-curl -X POST http://127.0.0.1:8787/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer dummy" \
-  -d '{
-    "model": "subscription-bridge-fake",
-    "messages": [{"role": "user", "content": "Say hello"}]
-  }'
-
-# 4. For Gemini models, start Chrome with remote debugging
+# 1. Start Chrome with remote debugging
 google-chrome \
   --remote-debugging-port=9333 \
   --user-data-dir="$HOME/.subscription-bridge/chrome-profile" \
   --no-first-run \
   --no-default-browser-check
 
-# 5. Navigate to https://gemini.google.com/app and log in manually
-# 6. Select the model in OpenCode
+# 2. Navigate to https://gemini.google.com/app and log in manually
+
+# 3. Start the bridge server
+bridge server --provider gemini
+
+# 4. Verify models
+curl http://127.0.0.1:8787/v1/models
+
+# 5. Select a Gemini model in OpenCode
+```
+
+### Option B: ChatGPT
+
+```bash
+# 1. Start Chrome with remote debugging
+google-chrome \
+  --remote-debugging-port=9333 \
+  --user-data-dir="$HOME/.subscription-bridge/chrome-profile" \
+  --no-first-run \
+  --no-default-browser-check
+
+# 2. Navigate to https://chatgpt.com and log in manually
+
+# 3. Start the bridge server
+bridge server --provider chatgpt
+
+# 4. Verify models
+curl http://127.0.0.1:8787/v1/models
+
+# 5. Select the ChatGPT model in OpenCode
+```
+
+### Option C: Both
+
+```bash
+# Start server with both providers
+bridge server --provider both
+
+# Or let the server prompt you
+bridge server
+# ? Which provider do you want to use?
+#   1) Gemini
+#   2) ChatGPT
+#   3) Both
 ```
 
 ---
 
 ## Model Reference
 
-| Model ID | Gemini Variant | Context | Chrome Required |
-|----------|---------------|---------|-----------------|
-| `subscription-bridge-fake` | Deterministic test | 32K | No |
-| `subscription-bridge-gemini-fast` | Gemini 3 Flash | 1M | Yes |
-| `subscription-bridge-gemini-thinking` | Gemini 3 Deep Think | 192K | Yes |
-| `subscription-bridge-gemini-pro` | Gemini 3.1 Pro | 1M | Yes |
+| Model ID | Backend | Context | Output | Browser Required |
+|----------|---------|---------|--------|-----------------|
+| `subscription-bridge-fake` | FakeProviderAdapter | 32K | 8K | No |
+| `subscription-bridge-gemini-fast` | Gemini 3 Flash | 1M | 8K | Yes |
+| `subscription-bridge-gemini-thinking` | Gemini 3 Deep Think | 192K | 64K | Yes |
+| `subscription-bridge-gemini-pro` | Gemini 3.1 Pro | 1M | 64K | Yes |
+| `subscription-bridge-chatgpt` | ChatGPT (GPT-4o) | 128K | 16K | Yes |
 
 ---
 
@@ -138,15 +175,15 @@ google-chrome \
 SubscriptionBridge supports OpenAI tool calls in the following way:
 
 1. **Tools are accepted** in `/v1/chat/completions` requests
-2. **Tools are converted** into Gemini prompt instructions — the model is told
+2. **Tools are converted** into prompt instructions — the model is told
    to respond with a JSON `tool_calls` object when a tool is needed
-3. **Gemini's JSON output is parsed** and converted to OpenAI-compatible
+3. **The model's JSON output is parsed** and converted to OpenAI-compatible
    `tool_calls` in the response
 4. **Tool results** from OpenCode (`role: "tool"`) are converted into readable
    transcript entries in the prompt
-5. **SubscriptionBridge does not execute** tools — OpenCode handles execution
+5. **SubscriptionBridge does not execute** tools when used via OpenCode — OpenCode handles execution
 
-When Gemini decides to call a tool, the response contains:
+When the model decides to call a tool, the response contains:
 ```json
 {
   "choices": [{
@@ -171,13 +208,13 @@ When Gemini decides to call a tool, the response contains:
 
 ## Known Limitations
 
-- **Tool call reliability**: Gemini web UI may not reliably produce structured
+- **Tool call reliability**: Browser-based models may not reliably produce structured
   tool call JSON. Results may vary compared to API-based models.
 - **Streaming is simulated**: True token-by-token streaming from the browser
   provider is not available. Response text is chunked into SSE events.
 - **Token counts are approximate**: Uses character count / 4, not a real tokenizer.
 - **Context limit is approximate**: Based on estimated tokens. If exceeded, the
   API returns `context_length_exceeded` — OpenCode compaction handles this.
-- **Browser latency**: Gemini responses are slower than API-based models.
+- **Browser latency**: Responses are slower than API-based models.
 - **No multimodal**: Image inputs in content arrays are accepted but ignored.
 - **API key**: Any value works (e.g., `"dummy"`). The server does not validate.

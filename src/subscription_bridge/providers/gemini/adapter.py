@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any
 
@@ -66,18 +67,29 @@ class GeminiProviderAdapter(ProviderAdapter):
             session = await self._pool.acquire("gemini", request.run_id, self._page_factory)
 
             requested_variant = _extract_model_variant(request)
+            requested_thinking = _extract_thinking_enabled(request)
             detected_before = await _detect_model_label(session.page)
             if requested_variant:
                 logger.info(
                     "model_switch_requested",
                     requested=requested_variant,
+                    thinking=requested_thinking,
                     detected_before=detected_before,
                     run_id=request.run_id,
                 )
             if requested_variant and session.selected_model_variant != requested_variant:
                 switched = await _switch_model_variant(session.page, requested_variant)
-                if not switched:
-                    detected_after = await _detect_model_label(session.page)
+                detected_after = await _detect_model_label(session.page)
+                if switched:
+                    session.selected_model_variant = requested_variant
+                    logger.info(
+                        "model_switch_done",
+                        requested=requested_variant,
+                        detected_before=detected_before,
+                        detected_after=detected_after,
+                        run_id=request.run_id,
+                    )
+                else:
                     diagnostics = await collect_button_diagnostics(session.page)
                     logger.warning(
                         "model_switch_failed",
@@ -87,16 +99,9 @@ class GeminiProviderAdapter(ProviderAdapter):
                         diagnostics=diagnostics,
                         run_id=request.run_id,
                     )
-                    session.selected_model_variant = None
-                session.selected_model_variant = requested_variant
-                detected_after = await _detect_model_label(session.page)
-                logger.info(
-                    "model_switch_done",
-                    requested=requested_variant,
-                    detected_before=detected_before,
-                    detected_after=detected_after,
-                    run_id=request.run_id,
-                )
+
+            if requested_thinking:
+                await _toggle_thinking(session.page, enabled=True)
 
             is_continuation = session.has_active_conversation
 
@@ -195,6 +200,8 @@ class GeminiProviderAdapter(ProviderAdapter):
                 latency_seconds=time.monotonic() - start,
                 error=str(e), metadata=upload_meta or {},
             )
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             if session is not None:
                 await session.screenshot_debug("provider_error")
@@ -329,36 +336,41 @@ def _extract_model_variant(request: ProviderRequest) -> str | None:
     return None
 
 
+def _extract_thinking_enabled(request: ProviderRequest) -> bool:
+    if request.metadata and isinstance(request.metadata, dict):
+        raw = request.metadata.get("gemini_thinking")
+        if isinstance(raw, bool):
+            return raw
+    return False
+
+
 def _normalize_variant(name: str) -> str:
     return " ".join(name.lower().split())
 
 
 def _variant_aliases(name: str) -> list[str]:
     n = _normalize_variant(name)
+    if "flash lite" in n or "flash-lite" in n:
+        return ["3.1 flash-lite", "flash-lite", "flash lite"]
     if "flash" in n:
-        return ["gemini 3 flash", "flash"]
-    if "deep think" in n or "thinking" in n:
-        return ["gemini 3 deep think", "deep think", "thinking"]
+        return ["3.5 flash", "flash"]
+    if "thinking" in n:
+        return ["thinking", "extended"]
     if "pro" in n:
-        return ["gemini 3.1 pro", "gemini 3 pro", "pro"]
+        return ["3.1 pro", "pro"]
     return [n]
 
 
 def _variant_select_labels(name: str) -> list[str]:
     n = _normalize_variant(name)
+    if "flash lite" in n or "flash-lite" in n:
+        return ["3.1 flash-lite", "flash-lite", "flash lite", "lite"]
     if "flash" in n:
-        return ["gemini 3 flash", "flash", "fast"]
-    if "deep think" in n or "thinking" in n:
-        return ["gemini 3 deep think", "deep think", "thinking"]
+        return ["3.5 flash", "flash", "all-around"]
+    if "thinking" in n:
+        return ["thinking", "extended", "standard"]
     if "pro" in n:
-        return [
-            "gemini 3.1 pro",
-            "gemini 3 pro",
-            "gemini 2.5 pro",
-            "2.5 pro",
-            "gemini pro",
-            "pro",
-        ]
+        return ["3.1 pro", "pro", "advanced"]
     return _variant_aliases(name)
 
 
@@ -410,6 +422,49 @@ async def _switch_model_variant(page: Any, variant: str) -> bool:
         await _async_sleep(0.4)
 
     return False
+
+
+async def _toggle_thinking(page: Any, enabled: bool = True) -> bool:
+    script = r"""
+    (enabled) => {
+        function visible(el) {
+            const r = el.getBoundingClientRect();
+            const s = getComputedStyle(el);
+            return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
+        }
+        const nodes = Array.from(document.querySelectorAll(
+            'button, [role="switch"], [role="checkbox"], [role="button"], label, [class*="toggle"]'
+        ));
+        for (const el of nodes) {
+            if (!visible(el)) continue;
+            const txt = ((el.getAttribute('aria-label') || '') + ' ' +
+                         (el.getAttribute('title') || '') + ' ' +
+                         (el.innerText || '') + ' ' +
+                         (el.textContent || '') + ' ' +
+                         (el.getAttribute('data-testid') || '')).toLowerCase();
+            const isThinking = txt.includes('thinking') || txt.includes('think');
+            if (!isThinking) continue;
+            const isToggle = el.tagName === 'BUTTON' || el.tagName === 'LABEL' ||
+                             el.getAttribute('role') === 'switch' ||
+                             el.getAttribute('role') === 'checkbox' ||
+                             el.getAttribute('role') === 'button' ||
+                             el.classList.contains('toggle');
+            if (!isToggle) continue;
+            const isChecked = el.getAttribute('aria-checked') === 'true' ||
+                              el.classList.contains('active') ||
+                              el.classList.contains('selected') ||
+                              el.getAttribute('data-state') === 'on';
+            if (enabled && !isChecked) { el.click(); return true; }
+            if (!enabled && isChecked) { el.click(); return true; }
+            return false;
+        }
+        return false;
+    }
+    """
+    try:
+        return bool(await page.evaluate(script, enabled))
+    except Exception:
+        return False
 
 
 async def _detect_model_label(page: Any) -> str:

@@ -119,6 +119,61 @@ def _ensure_gemini_provider() -> GeminiProviderAdapter:
     return adapter
 
 
+def _ensure_chatgpt_provider() -> Any:
+    from subscription_bridge.providers.chatgpt import ChatGPTProviderAdapter
+
+    registry = _get_registry()
+    if "chatgpt" in registry:
+        existing = registry.get("chatgpt")
+        return existing
+
+    pm = _ensure_browser()
+    pool = _get_session_pool()
+
+    async def _page_factory() -> Any:
+        return await pm.create_page()
+
+    adapter = ChatGPTProviderAdapter(
+        session_pool=pool,
+        page_factory=_page_factory,
+    )
+    registry.register(adapter)
+    return adapter
+
+
+def _cleanup_global_browser() -> None:
+    global _playwright_manager, _session_pool
+
+    async def _cleanup() -> None:
+        global _playwright_manager, _session_pool
+        if _session_pool is not None:
+            await _session_pool.close_all()
+            _session_pool = None
+        if _playwright_manager is not None:
+            await _playwright_manager.stop()
+            _playwright_manager = None
+
+        from subscription_bridge.api.server import app
+        deps = getattr(app.state, "deps", None)
+        if deps is not None:
+            await deps.shutdown()
+
+    has_browser = _playwright_manager is not None or _session_pool is not None
+    if has_browser:
+        try:
+            asyncio.run(_cleanup())
+        except Exception:
+            pass
+
+    if not has_browser:
+        from subscription_bridge.api.server import app
+        if hasattr(app.state, "deps") and app.state.deps is not None:
+            try:
+                asyncio.run(_cleanup())
+            except Exception:
+                pass
+
+
 @app.callback()
 def main(
     ctx: typer.Context,
@@ -159,6 +214,7 @@ def ask(
         from subscription_bridge.providers.base import ProviderAdapter
 
         gemini_adapter: GeminiProviderAdapter | None = None
+        chatgpt_adapter: Any | None = None
         generic_adapter: ProviderAdapter | None = None
 
         if provider_name == "gemini":
@@ -169,6 +225,12 @@ def ask(
                 console.print("\n[bold]Manual Chrome launch command:[/bold]")
                 _print_launch_command("http://127.0.0.1:9333")
                 raise typer.Exit(code=1) from e
+        elif provider_name == "chatgpt":
+            try:
+                chatgpt_adapter = _ensure_chatgpt_provider()
+            except PlaywrightLaunchError as e:
+                console.print(f"[red]Browser error:[/red] {e}")
+                raise typer.Exit(code=1) from e
         else:
             registry = _get_registry()
             try:
@@ -177,8 +239,8 @@ def ask(
                 console.print(f"[red]Error:[/red] {e}")
                 raise typer.Exit(code=1) from e
 
-        if files and provider_name != "gemini":
-            console.print("[yellow]Note:[/yellow] --files are only processed by the gemini provider. "
+        if files and provider_name not in ("gemini", "chatgpt"):
+            console.print("[yellow]Note:[/yellow] --files are only processed by gemini/chatgpt providers. "
                           "They will be ignored.")
 
         if files and provider_name == "gemini":
@@ -202,6 +264,8 @@ def ask(
 
         if gemini_adapter is not None:
             response = await gemini_adapter.send_prompt(request)
+        elif chatgpt_adapter is not None:
+            response = await chatgpt_adapter.send_prompt(request)
         elif generic_adapter is not None:
             response = await generic_adapter.send_prompt(request)
         else:
@@ -426,6 +490,12 @@ def run_task(
             except PlaywrightLaunchError as e:
                 console.print(f"[red]Browser error:[/red] {e}")
                 return
+        elif provider == "chatgpt":
+            try:
+                provider_adapter = _ensure_chatgpt_provider()
+            except PlaywrightLaunchError as e:
+                console.print(f"[red]Browser error:[/red] {e}")
+                return
         else:
             reg = _get_registry()
             try:
@@ -459,19 +529,114 @@ def start_server(
     port: int = typer.Option(8787, "--port", "-p", help="Bind port"),
     reload: bool = typer.Option(False, "--reload", help="Auto-reload on code changes"),
     log_level: str = typer.Option("info", "--log-level", help="Log level"),
+    provider: str = typer.Option(
+        None, "--provider", "-P",
+        help="Provider to initialize: gemini, chatgpt, or both (prompts if not set)",
+    ),
 ) -> None:
     import uvicorn
 
+    chosen = provider
+    if chosen is None:
+        console.print()
+        console.print("[bold]Which provider do you want to use?[/bold]")
+        console.print("  [cyan]1[/cyan]  Gemini  (gemini.google.com)")
+        console.print("  [cyan]2[/cyan]  ChatGPT (chatgpt.com)")
+        console.print("  [cyan]3[/cyan]  Both")
+        console.print()
+        choice = input("Enter 1, 2, or 3 [default: 1]: ").strip() or "1"
+        if choice == "2":
+            chosen = "chatgpt"
+        elif choice == "3":
+            chosen = "both"
+        else:
+            chosen = "gemini"
+        console.print()
+
+    providers_to_init = []
+    if chosen == "both":
+        providers_to_init = ["gemini", "chatgpt"]
+    elif chosen in ("gemini", "chatgpt"):
+        providers_to_init = [chosen]
+    else:
+        console.print(f"[red]Unknown provider:[/red] {chosen}")
+        raise typer.Exit(code=1)
+
+    console.print(f"[dim]Initializing provider(s):[/dim] [cyan]{', '.join(providers_to_init)}[/cyan]")
+    for pname in providers_to_init:
+        if pname == "gemini":
+            try:
+                _ensure_gemini_provider()
+                console.print("  [green]✓[/green] Gemini ready")
+            except PlaywrightLaunchError as e:
+                console.print(f"  [red]✗[/red] Gemini: {e}")
+                _print_launch_command("http://127.0.0.1:9333")
+        elif pname == "chatgpt":
+            try:
+                _ensure_chatgpt_provider()
+                console.print("  [green]✓[/green] ChatGPT ready")
+            except PlaywrightLaunchError as e:
+                console.print(f"  [red]✗[/red] ChatGPT: {e}")
+
+    console.print()
     console.print(f"[dim]API server starting on[/dim] [cyan]{host}:{port}[/cyan]")
     console.print(f"[dim]Docs:[/dim] [cyan]http://{host}:{port}/docs[/cyan]")
+    console.print()
 
-    uvicorn.run(
-        "subscription_bridge.api.server:app",
-        host=host,
-        port=port,
-        reload=reload,
-        log_level=log_level,
-    )
+    try:
+        uvicorn.run(
+            "subscription_bridge.api.server:app",
+            host=host,
+            port=port,
+            reload=reload,
+            log_level=log_level,
+        )
+    finally:
+        _cleanup_global_browser()
+
+
+@app.command("stop")
+def stop_server(
+    port: int = typer.Option(8787, "--port", "-p", help="Port to find server on"),
+) -> None:
+    import os
+    import signal
+    import subprocess
+    import time as _time
+
+    console.print(f"[dim]Looking for bridge server on port {port}...[/dim]")
+
+    try:
+        result = subprocess.run(
+            ["lsof", "-ti", f"tcp:{port}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        pids = [p.strip() for p in result.stdout.strip().split("\n") if p.strip()]
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pids = []
+
+    if not pids:
+        console.print(f"[yellow]No server found on port {port}[/yellow]")
+        return
+
+    for pid in pids:
+        try:
+            os.kill(int(pid), signal.SIGINT)
+            console.print(f"[dim]Sent SIGINT to PID {pid} for graceful shutdown[/dim]")
+        except (ProcessLookupError, PermissionError) as e:
+            console.print(f"[red]Could not signal PID {pid}: {e}[/red]")
+
+    _time.sleep(2.0)
+
+    for pid in pids:
+        try:
+            os.kill(int(pid), 0)
+            os.kill(int(pid), signal.SIGKILL)
+            console.print(f"[yellow]Force-killed PID {pid}[/yellow]")
+        except (ProcessLookupError, PermissionError):
+            pass
+
+    console.print(f"[green]Stopped server on port {port}[/green]")
 
 
 @codebase_app.command("index")

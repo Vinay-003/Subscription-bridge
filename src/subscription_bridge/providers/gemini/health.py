@@ -152,6 +152,9 @@ async def navigate_to_gemini(page: Any) -> None:
 
 async def navigate_to_fresh_chat(page: Any) -> None:
     await navigate_to_gemini(page)
+    from subscription_bridge.browser.ui_guard import safe_click_labels
+    await safe_click_labels(page, ["new chat", "New chat"], timeout=5)
+    await _sleep(1.0)
 
 
 def _url_is_app(url: str) -> bool:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from subscription_bridge import __version__
@@ -28,6 +29,7 @@ class AppDependencies:
         self._config: dict[str, Any] = {}
         self._registry: ProviderRegistry | None = None
         self._gemini_adapter: GeminiProviderAdapter | None = None
+        self._chatgpt_adapter: Any | None = None
         self._session_pool: SessionPool | None = None
         self._playwright_manager: PlaywrightManager | None = None
         self._browser_started = False
@@ -88,8 +90,47 @@ class AppDependencies:
         reg.register(self._gemini_adapter)
         return self._gemini_adapter
 
+    async def get_chatgpt_adapter(self) -> Any:
+        if self._chatgpt_adapter is not None:
+            return self._chatgpt_adapter
+
+        await self.ensure_browser()
+
+        pool = self._session_pool
+        pm = self._playwright_manager
+
+        async def _page_factory() -> Any:
+            return await pm.create_page()  # type: ignore[union-attr]
+
+        from subscription_bridge.providers.chatgpt import ChatGPTProviderAdapter
+
+        self._chatgpt_adapter = ChatGPTProviderAdapter(
+            session_pool=pool,  # type: ignore[arg-type]
+            page_factory=_page_factory,
+        )
+        reg = self.get_registry()
+        reg.register(self._chatgpt_adapter)
+        return self._chatgpt_adapter
+
     def get_session_pool(self) -> SessionPool | None:
         return self._session_pool
+
+    async def shutdown(self) -> None:
+        try:
+            if self._session_pool is not None:
+                await self._session_pool.close_all()
+                self._session_pool = None
+            if self._playwright_manager is not None:
+                await self._playwright_manager.stop()
+                self._playwright_manager = None
+        except asyncio.CancelledError:
+            self._session_pool = None
+            self._playwright_manager = None
+            self._browser_started = False
+            raise
+        except Exception:
+            pass
+        self._browser_started = False
 
     def get_version(self) -> str:
         return __version__
@@ -119,5 +160,16 @@ class AppDependencies:
                 result["gemini"] = "login_required"
             else:
                 result["gemini"] = "unavailable"
+
+        try:
+            adapter = await self.get_chatgpt_adapter()
+            ok = await adapter.health_check()
+            result["chatgpt"] = "ready" if ok else "unavailable"
+        except Exception as e:
+            err = str(e)
+            if "login" in err.lower():
+                result["chatgpt"] = "login_required"
+            else:
+                result["chatgpt"] = "unavailable"
 
         return result

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import base64
-import binascii
 from pathlib import Path
 
 from subscription_bridge.core.errors import PathTraversalError
@@ -12,13 +10,12 @@ class FileWriteTool(Tool):
     name = "file_write"
     description = (
         "Write content to a file in the workspace. Creates parent directories if needed. "
-        "Accepts either 'content' (raw string) or 'content_base64' (base64-encoded UTF-8). "
-        "For large or quote-heavy file contents, use content_base64."
+        "Use 'content' with the raw string to write. "
+        "For large files (>200 lines), use bash with a heredoc instead."
     )
     input_schema = {
         "path": "string (required, file path relative to workspace)",
-        "content": "string (optional, raw file content)",
-        "content_base64": "string (optional, base64-encoded UTF-8 file content)",
+        "content": "string (required, raw file content — escape newlines as \\n, quotes as \\\")",
     }
 
     async def run(self, arguments: dict) -> ToolResult:
@@ -31,10 +28,12 @@ class FileWriteTool(Tool):
             return ToolResult(name=self.name, success=False, error="path argument is required")
 
         if content_b64:
+            import base64 as _b64
+            import binascii as _bin
             try:
-                decoded = base64.b64decode(content_b64, validate=True)
+                decoded = _b64.b64decode(content_b64, validate=True)
                 content = decoded.decode("utf-8")
-            except (ValueError, binascii.Error) as e:
+            except (ValueError, _bin.Error) as e:
                 return ToolResult(
                     name=self.name, success=False,
                     error=f"Invalid base64 content: {e}",
@@ -44,6 +43,17 @@ class FileWriteTool(Tool):
             return ToolResult(
                 name=self.name, success=False,
                 error="either 'content' or 'content_base64' is required",
+            )
+
+        _GARBAGE_PATTERNS = {"YmFzZTY0", "base64", ""}
+        if content.strip() in _GARBAGE_PATTERNS and len(content.strip()) < 20:
+            return ToolResult(
+                name=self.name, success=False,
+                error=(
+                    "Refusing to write garbage content. "
+                    "The content field contains only a placeholder, not actual file content. "
+                    "Use 'content' with the full raw string, or use bash with a heredoc for large files."
+                ),
             )
 
         resolved = Path(workspace).expanduser().resolve() / raw_path

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -10,7 +12,28 @@ from subscription_bridge.api.routes import router
 from subscription_bridge.core.errors import ParserError
 
 
+class _Lifespan:
+    def __init__(self, deps: AppDependencies) -> None:
+        self._deps = deps
+
+    async def __aenter__(self) -> None:
+        return None
+
+    async def __aexit__(self, *exc_info: object) -> bool:
+        exc = exc_info[1] if exc_info[0] is not None else None
+        try:
+            await self._deps.shutdown()
+        except asyncio.CancelledError:
+            pass
+        if isinstance(exc, asyncio.CancelledError):
+            return True
+        return False
+
+
 def create_app() -> FastAPI:
+    deps = AppDependencies()
+    deps.load_config()
+
     app = FastAPI(
         title="SubscriptionBridge API",
         description="Local personal agent runtime for browser-based LLMs. "
@@ -18,7 +41,9 @@ def create_app() -> FastAPI:
         version="0.1.0",
         docs_url="/docs",
         redoc_url="/redoc",
+        lifespan=lambda app: _Lifespan(deps),
     )
+    app.state.deps = deps
 
     app.add_middleware(
         CORSMiddleware,
@@ -27,10 +52,6 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-
-    deps = AppDependencies()
-    deps.load_config()
-    app.state.deps = deps
 
     app.include_router(router)
     app.include_router(openai_router)
