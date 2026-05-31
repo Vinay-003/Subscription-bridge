@@ -24,9 +24,11 @@ from subscription_bridge.api.openai_models import (
     Choice,
     ChoiceDelta,
     DeltaMessage,
+    FunctionCall,
     ModelList,
     OpenAIModel,
     ResponseMessage,
+    ToolCall,
     Usage,
 )
 from subscription_bridge.providers.base import ProviderRequest
@@ -73,12 +75,28 @@ MODEL_OUTPUT_LIMITS: dict[str, int] = {
 }
 
 TOOL_CALL_SYSTEM_PROMPT = (
-    'You have access to tools. When you need to use a tool, '
-    'respond with a JSON object: {{"tool_calls": [{{"id": "call_1", '
-    '"type": "function", "function": {{"name": "tool_name", '
-    '"arguments": {{"arg1": "value1"}}}}}}]}}\n\n'
-    "Available tools:\n{tools_desc}\n\n"
-    "If you do not need a tool, respond normally with plain text."
+    "You have access to the following tools. Use them ONLY when you need to perform an action "
+    "(read files, search code, run commands, etc.).\n\n"
+    "{tools_desc}\n\n"
+    "## How to call a tool\n"
+    "When you need to use a tool, respond with EXACTLY this format:\n"
+    '<tool_call>{{"id": "call_1", "type": "function", '
+    '"function": {{"name": "tool_name", "arguments": {{"arg1": "val"}}}}}}</tool_call>\n\n'
+    "Multiple tools in one response:\n"
+    '<tool_call>{{"id": "call_1", "type": "function", '
+    '"function": {{"name": "read_file", "arguments": {{"path": "foo.py"}}}}}}</tool_call>\n'
+    '<tool_call>{{"id": "call_2", "type": "function", '
+    '"function": {{"name": "grep", "arguments": '
+    '{{"pattern": "class Foo", "include": "*.py"}}}}}}</tool_call>\n\n'
+    "## When NOT to call a tool\n"
+    "For simple conversation (greetings, questions about yourself, etc.), respond with plain text only. "
+    "Do NOT invent tool calls. Only use a tool when it is genuinely needed for the task.\n\n"
+    "## Important rules\n"
+    "- The arguments field MUST be a valid JSON object string\n"
+    "- The id field should be unique per call (e.g., call_1, call_2, ...)\n"
+    "- Do NOT include any text before or after the <tool_call> tags when calling tools\n"
+    "- If you need to explain something AND call a tool, put your explanation in a normal assistant response first, "
+    "then the tool calls will be processed separately"
 )
 
 
@@ -506,7 +524,7 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
 
     if req.stream:
         return StreamingResponse(
-            _stream_response(provider_adapter, provider_req, req.model),
+            _stream_response(provider_adapter, provider_req, req.model, has_tools=has_tools),
             media_type="text/event-stream",
         )
 
@@ -516,19 +534,27 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
     if not response.success:
         return _error_json(response.error or "Provider error", code="provider_error", status_code=502)
 
+    reply_text = response.text or ""
+
+    if has_tools:
+        tool_calls = _parse_tool_calls(reply_text)
+        if tool_calls:
+            message = ResponseMessage(role="assistant", content=None, tool_calls=tool_calls)
+            finish_reason = "tool_calls"
+        else:
+            message = ResponseMessage(role="assistant", content=reply_text)
+            finish_reason = "stop"
+    else:
+        message = ResponseMessage(role="assistant", content=reply_text)
+        finish_reason = "stop"
+
     return ChatCompletionResponse(
         id=f"chatcmpl-{uuid.uuid4().hex[:12]}", created=int(time.time()), model=req.model,
-        choices=[
-            Choice(
-                index=0,
-                message=ResponseMessage(content=response.text),
-                finish_reason="stop",
-            )
-        ],
+        choices=[Choice(index=0, message=message, finish_reason=finish_reason)],
         usage=Usage(
             prompt_tokens=_estimate_tokens(prompt),
-            completion_tokens=_estimate_tokens(response.text),
-            total_tokens=_estimate_tokens(prompt) + _estimate_tokens(response.text),
+            completion_tokens=_estimate_tokens(reply_text),
+            total_tokens=_estimate_tokens(prompt) + _estimate_tokens(reply_text),
         ),
     )
 
@@ -560,30 +586,38 @@ def _convert_messages(
                     conversation.append(f"Assistant (tool call): {name}({args})")
             if text:
                 conversation.append(f"Assistant: {text}")
+            elif not msg.tool_calls:
+                conversation.append("Assistant: (no response)")
         elif role == "tool":
-            name = ""
+            tid = ""
             if hasattr(msg, "tool_call_id") and msg.tool_call_id:
-                name = f" (call: {msg.tool_call_id})"
-            conversation.append(f"Tool result{name}: {text[:1000]}")
+                tid = f"({msg.tool_call_id}) "
+            conversation.append(f"Tool result{tid}: {text[:2000]}")
 
     if tools and require_json_tools:
-        import json as _json
         tools_desc_lines = []
         for t in tools:
-            fname = t.get("function", t).get("name", "?") if isinstance(t, dict) else "?"
-            fdesc = t.get("function", t).get("description", "") if isinstance(t, dict) else ""
-            fparams = t.get("function", t).get("parameters", {}) if isinstance(t, dict) else {}
-            tools_desc_lines.append(f"  {fname}: {fdesc} | args: {_json.dumps(fparams)[:300]}")
-        tools_prompt = TOOL_CALL_SYSTEM_PROMPT.format(tools_desc="\n".join(tools_desc_lines))
+            fn = t.get("function", t) if isinstance(t, dict) else {}
+            fname = fn.get("name", "?") if isinstance(fn, dict) else "?"
+            fdesc = fn.get("description", "") if isinstance(fn, dict) else ""
+            fparams = fn.get("parameters", {}) if isinstance(fn, dict) else {}
+            params_str = json.dumps(fparams)[:500]
+            tools_desc_lines.append(f"  - {fname}: {fdesc}")
+            if fparams:
+                tools_desc_lines.append(f"    Parameters: {params_str}")
+        tools_prompt = TOOL_CALL_SYSTEM_PROMPT.format(
+            tools_desc="\n".join(tools_desc_lines) if tools_desc_lines else "  (no tools defined)"
+        )
         system_parts.append(tools_prompt)
 
     system_prompt = "\n".join(system_parts) if system_parts else ""
 
-    parts: list[str] = []
-    if conversation:
-        parts.append("Conversation:")
-        parts.extend(conversation)
-        parts.append("")
+    if not conversation:
+        return "", system_prompt
+
+    parts = ["## Conversation"]
+    parts.extend(conversation)
+    parts.append("## Assistant Response")
 
     prompt = "\n".join(parts).strip()
     return prompt, system_prompt
@@ -660,65 +694,178 @@ def _cleanup_temp_files(paths: list[str]) -> None:
             pass
 
 
-def _parse_tool_calls(text: str) -> list[dict[str, Any]]:
+def _parse_tool_calls(text: str) -> list[ToolCall]:
+    """Extract ToolCall objects from model response text.
+
+    Tries, in order:
+    1. <tool_call> XML tags
+    2. ```json ... ``` code blocks containing tool_calls
+    3. Top-level JSON object with tool_calls key
+    4. Regex fallback for partial JSON
+    """
     import json as _json
+    import re as _re
+
     text = text.strip()
+    raw_calls: list[dict[str, Any]] = []
+
+    # 1. <tool_call> XML tags — the recommended format
+    tag_pattern = _re.compile(r'<tool_call>(.*?)</tool_call>', _re.DOTALL)
+    for match in tag_pattern.finditer(text):
+        block = match.group(1).strip()
+        block = block.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+        try:
+            parsed = _json.loads(block)
+            if isinstance(parsed, dict):
+                raw_calls.append(parsed)
+            elif isinstance(parsed, list):
+                raw_calls.extend(parsed)
+        except _json.JSONDecodeError:
+            pass
+    if raw_calls:
+        return _normalize_tool_calls(raw_calls)
+
+    # 2. ```json code blocks
+    code_block = _re.search(r'```(?:json)?\s*\n?(.*?)\n?```', text, _re.DOTALL)
+    if code_block:
+        block = code_block.group(1).strip()
+        try:
+            data = _json.loads(block)
+            if isinstance(data, dict) and "tool_calls" in data:
+                raw_calls = data["tool_calls"] if isinstance(data["tool_calls"], list) else []
+                if raw_calls:
+                    return _normalize_tool_calls(raw_calls)
+            if isinstance(data, list):
+                return _normalize_tool_calls(data)
+            if isinstance(data, dict):
+                raw_calls = [data]
+                return _normalize_tool_calls(raw_calls)
+        except _json.JSONDecodeError:
+            pass
+
+    # 3. Whole text is JSON
     try:
         data = _json.loads(text)
         if isinstance(data, dict) and "tool_calls" in data:
             raw = data["tool_calls"]
-            return list(raw) if isinstance(raw, list) else []
+            raw_calls = list(raw) if isinstance(raw, list) else []
+            if raw_calls:
+                return _normalize_tool_calls(raw_calls)
         if isinstance(data, list):
-            return data
+            return _normalize_tool_calls(data)
     except _json.JSONDecodeError:
         pass
-    import re as _re
-    m = _re.search(r'\{[^{}]*"tool_calls"[^{}]*\}', text, _re.DOTALL)
-    if m:
-        try:
-            data = _json.loads(m.group(0))
-            if isinstance(data, dict) and "tool_calls" in data:
-                raw = data["tool_calls"]
-                return list(raw) if isinstance(raw, list) else []
-        except _json.JSONDecodeError:
-            pass
+
     return []
+
+
+def _normalize_tool_calls(raw_calls: list[dict[str, Any]]) -> list[ToolCall]:
+    """Normalize raw tool call dicts into ToolCall Pydantic objects."""
+    result: list[ToolCall] = []
+    for i, raw in enumerate(raw_calls):
+        if not isinstance(raw, dict):
+            continue
+        call_id = raw.get("id", f"call_{i}")
+        call_type = raw.get("type", "function")
+        fn_raw = raw.get("function", raw)
+        fn_name = ""
+        if isinstance(fn_raw, dict):
+            fn_name = fn_raw.get("name", str(raw.get("name", "")))
+            args_val = fn_raw.get("arguments", raw.get("arguments", "{}"))
+        else:
+            fn_name = str(raw.get("name", ""))
+            args_val = raw.get("arguments", "{}")
+        if not isinstance(args_val, str):
+            try:
+                args_val = json.dumps(args_val)
+            except Exception:
+                args_val = "{}"
+        args_val = _ensure_json_string(args_val)
+        result.append(
+            ToolCall(
+                id=call_id,
+                type=call_type,
+                function=FunctionCall(name=fn_name, arguments=args_val),
+            )
+        )
+    return result
+
+
+def _ensure_json_string(s: str) -> str:
+    """Ensure s is a valid JSON string — if not, wrap it in quotes."""
+    import json as _json
+    s = s.strip()
+    try:
+        _json.loads(s)
+        return s
+    except _json.JSONDecodeError:
+        pass
+    try:
+        return _json.dumps(s)
+    except Exception:
+        return '"{}"'
 
 
 async def _stream_response(
     adapter: Any,
     request: ProviderRequest,
     model: str,
+    has_tools: bool = False,
 ) -> AsyncGenerator[str, None]:
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     now = int(time.time())
 
-    role_chunk = ChatCompletionChunk(
-        id=completion_id, created=now, model=model,
-        choices=[ChoiceDelta(index=0, delta=DeltaMessage(role="assistant"), finish_reason=None)],
-    )
-    yield f"data: {role_chunk.model_dump_json()}\n\n"
+    yield _stream_chunk(completion_id, now, model, role="assistant")
 
     response = await adapter.send_prompt(request)
+    text = (response.text or "") if response.success else ""
 
-    if response.success and response.text:
-        text = response.text
+    if has_tools:
+        tool_calls = _parse_tool_calls(text)
+        if tool_calls:
+            for tc in tool_calls:
+                yield _stream_chunk(
+                    completion_id, now, model,
+                    tool_calls=[tc.model_dump()],
+                )
+            yield _stream_chunk(completion_id, now, model, finish_reason="tool_calls")
+            yield "data: [DONE]\n\n"
+            return
+
+    if text:
         chunk_size = max(len(text) // 10, 5)
         for i in range(0, len(text), chunk_size):
-            chunk_text = text[i : i + chunk_size]
-            content_chunk = ChatCompletionChunk(
-                id=completion_id, created=now, model=model,
-                choices=[ChoiceDelta(index=0, delta=DeltaMessage(content=chunk_text), finish_reason=None)],
+            yield _stream_chunk(
+                completion_id, now, model,
+                content=text[i : i + chunk_size],
             )
-            yield f"data: {content_chunk.model_dump_json()}\n\n"
             await asyncio.sleep(0.01)
 
-    stop_chunk = ChatCompletionChunk(
-        id=completion_id, created=now, model=model,
-        choices=[ChoiceDelta(index=0, delta=DeltaMessage(), finish_reason="stop")],
-    )
-    yield f"data: {stop_chunk.model_dump_json()}\n\n"
+    yield _stream_chunk(completion_id, now, model, finish_reason="stop")
     yield "data: [DONE]\n\n"
+
+
+def _stream_chunk(
+    completion_id: str,
+    created: int,
+    model: str,
+    role: str | None = None,
+    content: str | None = None,
+    tool_calls: list[dict[str, Any]] | None = None,
+    finish_reason: str | None = None,
+) -> str:
+    delta = DeltaMessage(
+        role=role,
+        content=content,
+        tool_calls=tool_calls,
+    )
+    chunk = ChatCompletionChunk(
+        id=completion_id,
+        created=created,
+        model=model,
+        choices=[ChoiceDelta(index=0, delta=delta, finish_reason=finish_reason)],
+    )
+    return f"data: {chunk.model_dump_json()}\n\n"
 
 
 async def _error_stream(message: str) -> AsyncGenerator[str, None]:

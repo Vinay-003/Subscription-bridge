@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any
 
@@ -36,10 +37,12 @@ class ChatGPTProviderAdapter(ProviderAdapter):
         session: TabSession | None = None
         upload_meta: dict[str, Any] | None = None
         prompt = request.prompt
-        logger = get_logger("provider.chatgpt")
 
         try:
             session = await self._pool.acquire("chatgpt", request.run_id, self._page_factory)
+
+            if request.system_prompt:
+                prompt = request.system_prompt + "\n\n" + prompt
 
             requested_variant = _extract_model_variant(request)
             if requested_variant and session.selected_model_variant != requested_variant:
@@ -57,20 +60,30 @@ class ChatGPTProviderAdapter(ProviderAdapter):
                     run_id=request.run_id,
                 )
 
-            is_continuation = session.has_active_conversation
+            await self._ensure_fresh_chat(session)
+            await _wait_for_composer_ready(session.page)
+            pre_send_count = await _count_assistant_messages(session.page)
 
-            if not is_continuation:
-                await self._ensure_fresh_chat(session)
+            ok = await _type_prompt(session.page, prompt)
+            if not ok:
+                return ProviderResponse(
+                    provider=self.name, text="", raw_text="", success=False,
+                    latency_seconds=time.monotonic() - start,
+                    error="Failed to type prompt into ChatGPT composer",
+                    metadata=upload_meta or {},
+                )
 
-            await _find_composer(session.page)
-            await _set_prompt_text(session.page, prompt)
             await _submit_via_enter(session.page)
             logger.info("send_method_used", method="enter", run_id=request.run_id)
 
-            accepted = await _wait_for_send_confirmation(session.page, timeout=20.0)
+            accepted = await _wait_for_send_confirmation(
+                session.page, pre_send_count=pre_send_count, timeout=20.0,
+            )
             if not accepted:
                 await _click_send_button(session.page)
-                accepted = await _wait_for_send_confirmation(session.page, timeout=25.0)
+                accepted = await _wait_for_send_confirmation(
+                    session.page, pre_send_count=pre_send_count, timeout=25.0,
+                )
 
             if not accepted:
                 await session.screenshot_debug("send_not_confirmed")
@@ -81,10 +94,12 @@ class ChatGPTProviderAdapter(ProviderAdapter):
                     metadata=upload_meta or {},
                 )
 
-            complete = await _wait_for_response_complete(session.page, timeout=180.0)
+            complete = await _wait_for_response_complete(
+                session.page, pre_send_count=pre_send_count, timeout=180.0,
+            )
             if not complete:
                 await session.screenshot_debug("response_timeout")
-                text = await _extract_latest_assistant_text(session.page)
+                text = await _extract_latest_assistant_text(session.page, pre_send_count)
                 if text:
                     return ProviderResponse(
                         provider=self.name, text=text, raw_text=text, success=True,
@@ -98,7 +113,7 @@ class ChatGPTProviderAdapter(ProviderAdapter):
                     metadata=upload_meta or {},
                 )
 
-            text = await _extract_latest_assistant_text(session.page)
+            text = await _extract_latest_assistant_text(session.page, pre_send_count)
             if not text:
                 await session.screenshot_debug("empty_response")
                 return ProviderResponse(
@@ -107,8 +122,6 @@ class ChatGPTProviderAdapter(ProviderAdapter):
                     error="ChatGPT returned empty response",
                     metadata=upload_meta or {},
                 )
-
-            session.has_active_conversation = True
 
             return ProviderResponse(
                 provider=self.name, text=text, raw_text=text, success=True,
@@ -172,20 +185,17 @@ class ChatGPTProviderAdapter(ProviderAdapter):
         await self._pool.close(session_id)
 
     async def _ensure_fresh_chat(self, session: TabSession) -> None:
-        import asyncio
         page = session.page
-        try:
-            await page.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=30000)
-        except Exception:
-            pass
-        await asyncio.sleep(2.0)
-        deadline = time.monotonic() + 45.0
+        await page.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=30000)
+        await asyncio.sleep(0.5)
+        deadline = time.monotonic() + 20.0
         while time.monotonic() < deadline:
             ready = await _chatgpt_app_ready(page)
             if ready:
                 await dismiss_overlays(page)
                 return
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(0.5)
+        raise RuntimeError("ChatGPT app failed to become ready within 20s")
 
 
 async def _chatgpt_app_ready(page: Any) -> bool:
@@ -225,7 +235,6 @@ async def _find_composer(page: Any, timeout: int = 30) -> Any:
         "main div[contenteditable='true']",
         "textarea",
     ]
-    import asyncio
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         for selector in selectors:
@@ -239,34 +248,79 @@ async def _find_composer(page: Any, timeout: int = 30) -> Any:
     raise RuntimeError(f"Could not find ChatGPT composer within {timeout}s")
 
 
-async def _set_prompt_text(page: Any, text: str) -> None:
+async def _wait_for_composer_ready(page: Any) -> None:
+    await _find_composer(page, timeout=30)
+
+
+async def _type_prompt(page: Any, text: str) -> bool:
     composer = await _find_composer(page)
-    try:
-        await composer.scroll_into_view_if_needed(timeout=5000)
-    except Exception:
-        pass
+    await composer.scroll_into_view_if_needed(timeout=5000)
+
+    # Method 1: JavaScript paste (fast, handles long text)
+    ok = await _paste_via_js(page, composer, text)
+    if ok:
+        await asyncio.sleep(0.3)
+        return True
+
+    # Method 2: keyboard fallback
     try:
         await composer.click(timeout=5000)
     except Exception:
         pass
-    import asyncio
     await asyncio.sleep(0.15)
-    try:
-        await page.keyboard.press("Control+a")
-        await page.keyboard.press("Backspace")
-    except Exception:
-        pass
+    await page.keyboard.press("Control+a")
+    await page.keyboard.press("Backspace")
     await asyncio.sleep(0.25)
+    await page.keyboard.insert_text(text)
+    await asyncio.sleep(0.3)
+    actual = await _get_composer_text(page)
+    if actual and len(actual.strip()) > 20:
+        return True
+    return bool(actual and actual.strip())
+
+
+async def _paste_via_js(page: Any, composer: Any, text: str) -> bool:
+    escaped = text.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("\r", "\\r")
+    escaped = escaped.replace("</script>", "<\\/script>")
+    script = rf"""
+    () => {{
+        // Try textarea first
+        const textareaSel = '#prompt-textarea, textarea[data-testid="prompt-textarea"], ' +
+            '[data-testid="composer"] textarea';
+        let el = document.querySelector(textareaSel);
+        if (el) {{
+            const tag = (el.tagName || '').toLowerCase();
+            if (tag === 'textarea' || tag === 'input') {{
+                el.value = '{escaped}';
+                el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                return true;
+            }}
+        }}
+        // Try contenteditable (ProseMirror)
+        el = document.querySelector(
+            '[data-testid="composer"] [contenteditable="true"], ' +
+            'div.ProseMirror[contenteditable="true"], ' +
+            'main div[contenteditable="true"]'
+        );
+        if (!el) return false;
+        el.focus();
+        document.execCommand('selectAll');
+        document.execCommand('insertText', false, '{escaped}');
+        return true;
+    }}
+    """
     try:
-        await page.keyboard.insert_text(text)
+        return bool(await page.evaluate(script))
     except Exception:
-        pass
+        return False
 
 
 async def _submit_via_enter(page: Any) -> None:
-    composer = await _find_composer(page, timeout=5)
     try:
-        await composer.click(timeout=3000)
+        composer = await _find_composer(page, timeout=5)
+        await composer.focus()
+        await composer.click()
     except Exception:
         pass
     await page.keyboard.press("Enter")
@@ -289,68 +343,87 @@ async def _click_send_button(page: Any) -> bool:
     return False
 
 
-async def _wait_for_send_confirmation(page: Any, timeout: float = 20.0) -> bool:
-    import asyncio
+async def _count_assistant_messages(page: Any) -> int:
+    report = await _submission_activity_report(page)
+    return int(report.get("assistantCount", 0))
+
+
+async def _wait_for_send_confirmation(
+    page: Any, timeout: float = 20.0, pre_send_count: int = 0,
+) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        try:
-            composer_text = await _get_composer_text(page)
-            if not composer_text.strip():
-                return True
-        except Exception:
-            pass
-        try:
-            current_url = page.url or ""
-            if "/c/" in current_url:
-                return True
-        except Exception:
-            pass
-        report = await _submission_activity_report(page)
-        if report.get("stopVisible") or report.get("thinkingVisible") or report.get("progressVisible"):
+        composer_text = await _get_composer_text(page)
+        if not composer_text.strip():
             return True
-        if report.get("assistantCount", 0) > 0:
+        report = await _submission_activity_report(page)
+        if report.get("stopVisible") or report.get("thinkingVisible"):
+            return True
+        current_count = int(report.get("assistantCount", 0))
+        if current_count > pre_send_count:
             return True
         await asyncio.sleep(0.5)
     return False
 
 
-async def _wait_for_response_complete(page: Any, timeout: float = 180.0) -> bool:
-    import asyncio
+async def _wait_for_response_complete(
+    page: Any, timeout: float = 180.0, pre_send_count: int = 0,
+) -> bool:
     deadline = time.monotonic() + timeout
     last_count = 0
     stable_cycles = 0
     while time.monotonic() < deadline:
         report = await _submission_activity_report(page)
-        current_count = report.get("assistantCount", 0)
+        current_count = int(report.get("assistantCount", 0))
         is_generating = report.get("stopVisible") or report.get("progressVisible")
 
-        if not is_generating:
-            if current_count > last_count:
-                stable_cycles += 1
-                if stable_cycles >= 3:
-                    return True
+        target_reached = current_count > pre_send_count
+
+        if not is_generating and target_reached:
+            if current_count != last_count:
+                stable_cycles = 0
             else:
-                if current_count > 0:
-                    stable_cycles += 1
-                    if stable_cycles >= 3:
-                        return True
+                stable_cycles += 1
+                if stable_cycles >= 8:
+                    return True
             last_count = current_count
         else:
             stable_cycles = 0
+            if not target_reached:
+                last_count = current_count
 
         await asyncio.sleep(0.5)
     return False
 
 
-async def _extract_latest_assistant_text(page: Any) -> str:
-    selectors = [
-        "[data-message-author-role='assistant']",
-        ".markdown",
-        ".prose",
-    ]
-    for selector in selectors:
+async def _extract_latest_assistant_text(page: Any, pre_send_count: int = 0) -> str:
+    script = r"""
+    () => {
+        const elements = Array.from(document.querySelectorAll(
+            '[data-message-author-role="assistant"]'
+        ));
+        const visible = elements.filter(el => {
+            const r = el.getBoundingClientRect();
+            const s = getComputedStyle(el);
+            return r.width > 0 && r.height > 0 &&
+                   s.display !== 'none' && s.visibility !== 'hidden';
+        });
+        if (!visible.length) return '';
+        const lastEl = visible[visible.length - 1];
+        return lastEl.innerText || lastEl.textContent || '';
+    }
+    """
+    try:
+        text = await page.evaluate(script)
+        if text and str(text).strip():
+            return str(text).strip()
+    except Exception:
+        pass
+
+    for selector in [".markdown", ".prose"]:
         try:
-            script = r"""
+            text = await page.evaluate(
+                r"""
     (selector) => {
         const elements = Array.from(document.querySelectorAll(selector));
         if (!elements.length) return '';
@@ -363,8 +436,9 @@ async def _extract_latest_assistant_text(page: Any) -> str:
         }
         return lastEl.innerText || lastEl.textContent || '';
     }
-            """
-            text = await page.evaluate(script, selector)
+                """,
+                selector,
+            )
             if text and str(text).strip():
                 return str(text).strip()
         except Exception:

@@ -66,6 +66,9 @@ class GeminiProviderAdapter(ProviderAdapter):
         try:
             session = await self._pool.acquire("gemini", request.run_id, self._page_factory)
 
+            if request.system_prompt:
+                prompt = request.system_prompt + "\n\n" + prompt
+
             requested_variant = _extract_model_variant(request)
             requested_thinking = _extract_thinking_enabled(request)
             detected_before = await _detect_model_label(session.page)
