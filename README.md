@@ -118,8 +118,8 @@ Then navigate to https://gemini.google.com/app and log in **once**. Login persis
 ### One-command startup script
 
 ```bash
-chmod +x ~/start-bridge.sh
-~/start-bridge.sh
+chmod +x ~/start.sh
+~/start.sh
 ```
 
 This starts Chrome + the bridge server. Then open OpenCode Desktop and select a Gemini model.

@@ -8,6 +8,7 @@ CHROME_PROFILE="$HOME/.subscription-bridge/chrome-profile"
 CDP_PORT=9333
 API_PORT=8787
 BRIDGE_PID=""
+CHROME_PID=""
 PROVIDER="${1:-gemini}"
 
 usage() {
@@ -40,12 +41,10 @@ cleanup() {
         sleep 2
         kill -9 "$BRIDGE_PID" 2>/dev/null || true
     fi
-    CDP_PID=$(lsof -ti tcp:$CDP_PORT 2>/dev/null || true)
-    if [ -n "$CDP_PID" ]; then
-        echo "Closing Chrome CDP (PID $CDP_PID)..."
-        kill "$CDP_PID" 2>/dev/null || true
+    if [ -n "$CHROME_PID" ]; then
+        kill "$CHROME_PID" 2>/dev/null || true
         sleep 1
-        kill -9 "$CDP_PID" 2>/dev/null || true
+        kill -9 "$CHROME_PID" 2>/dev/null || true
     fi
     echo "Done."
 }
@@ -60,13 +59,14 @@ mkdir -p "$CHROME_PROFILE"
 mkdir -p "$HOME/.subscription-bridge/downloads"
 mkdir -p "$HOME/.subscription-bridge/debug"
 
-# ---- 2. Check / kill existing Chrome on CDP port ----
-CDP_PID=$(lsof -ti tcp:$CDP_PORT 2>/dev/null || true)
-if [ -n "$CDP_PID" ]; then
-    echo "[1] Killing existing Chrome on port $CDP_PORT (PID $CDP_PID)..."
-    kill "$CDP_PID" 2>/dev/null || true
+# ---- 2. Kill any leftover process on API port ----
+API_PID=$(lsof -ti tcp:$API_PORT 2>/dev/null || true)
+if [ -n "$API_PID" ]; then
+    echo "[1] Killing existing process on port $API_PORT (PID $API_PID)..."
+    kill "$API_PID" 2>/dev/null || true
     for i in $(seq 1 10); do
-        if ! lsof -ti tcp:$CDP_PORT > /dev/null 2>&1; then
+        if ! lsof -ti tcp:$API_PORT > /dev/null 2>&1; then
+            echo "     Port freed after ${i}s"
             break
         fi
         sleep 1
@@ -74,7 +74,20 @@ if [ -n "$CDP_PID" ]; then
 fi
 
 # ---- 3. Launch Chrome with CDP ----
-echo "[2] Launching Chrome with CDP on port $CDP_PORT..."
+CDP_PID=$(lsof -ti tcp:$CDP_PORT 2>/dev/null || true)
+if [ -n "$CDP_PID" ]; then
+    echo "[2] Killing existing Chrome on port $CDP_PORT (PID $CDP_PID)..."
+    kill "$CDP_PID" 2>/dev/null || true
+    for i in $(seq 1 10); do
+        if ! lsof -ti tcp:$CDP_PORT > /dev/null 2>&1; then
+            echo "     Port released"
+            break
+        fi
+        sleep 1
+    done
+fi
+
+echo "[3] Launching Chrome with CDP on port $CDP_PORT..."
 google-chrome \
     --remote-debugging-port=$CDP_PORT \
     --user-data-dir="$CHROME_PROFILE" \
@@ -88,7 +101,7 @@ google-chrome \
 CHROME_PID=$!
 
 # ---- 4. Wait for CDP to be ready ----
-echo "[3] Waiting for CDP endpoint..."
+echo "[4] Waiting for CDP endpoint..."
 for i in $(seq 1 15); do
     if python3 -c "import socket; s=socket.socket(); s.settimeout(1); s.connect(('127.0.0.1',$CDP_PORT)); s.close()" 2>/dev/null; then
         echo "     CDP ready after ${i}s"
@@ -101,26 +114,12 @@ for i in $(seq 1 15); do
     sleep 1
 done
 
-# ---- 5. Kill any leftover process on API port ----
-API_PID=$(lsof -ti tcp:$API_PORT 2>/dev/null || true)
-if [ -n "$API_PID" ]; then
-    echo "[4] Killing existing process on port $API_PORT (PID $API_PID)..."
-    kill "$API_PID" 2>/dev/null || true
-    for i in $(seq 1 10); do
-        if ! lsof -ti tcp:$API_PORT > /dev/null 2>&1; then
-            echo "     Port freed after ${i}s"
-            break
-        fi
-        sleep 1
-    done
-fi
-
-# ---- 6. Launch bridge API server ----
+# ---- 5. Launch bridge API server ----
 echo "[5] Starting bridge API server on port $API_PORT (provider: $PROVIDER)..."
 $BRIDGE server --host 127.0.0.1 --port $API_PORT --provider "$PROVIDER" &
 BRIDGE_PID=$!
 
-# ---- 7. Wait for API server to be ready ----
+# ---- 6. Wait for API server ----
 echo "[6] Waiting for API server..."
 for i in $(seq 1 30); do
     if curl -s http://127.0.0.1:$API_PORT/health > /dev/null 2>&1; then

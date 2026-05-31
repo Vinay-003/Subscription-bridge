@@ -51,11 +51,24 @@ class PlaywrightManager:
 
         self._playwright = await async_playwright().start()
 
-        try:
-            self._browser = await self._playwright.chromium.connect_over_cdp(cdp_url)
-        except Exception as e:
-            msg = f"Failed to connect to Chrome via CDP at {cdp_url}: {e}"
-            raise PlaywrightLaunchError(msg) from e
+        import asyncio as _asyncio
+
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                self._browser = await self._playwright.chromium.connect_over_cdp(cdp_url)
+                last_error = None
+                break
+            except Exception as e:
+                last_error = e
+                if "setDownloadBehavior" in str(e):
+                    await _asyncio.sleep(1)
+                    continue
+                break
+
+        if last_error is not None:
+            msg = f"Failed to connect to Chrome via CDP at {cdp_url}: {last_error}"
+            raise PlaywrightLaunchError(msg) from last_error
 
         contexts = self._browser.contexts
         if contexts:
@@ -102,6 +115,8 @@ class PlaywrightManager:
 
         if chrome_path and Path(chrome_path).exists():
             launch_opts["executable_path"] = chrome_path
+        elif not chrome_path:
+            launch_opts["channel"] = "chrome"
 
         try:
             self._context = await self._playwright.chromium.launch_persistent_context(

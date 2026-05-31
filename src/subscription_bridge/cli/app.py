@@ -553,46 +553,27 @@ def start_server(
             chosen = "gemini"
         console.print()
 
-    providers_to_init = []
-    if chosen == "both":
-        providers_to_init = ["gemini", "chatgpt"]
-    elif chosen in ("gemini", "chatgpt"):
-        providers_to_init = [chosen]
-    else:
+    if chosen not in ("gemini", "chatgpt", "both"):
         console.print(f"[red]Unknown provider:[/red] {chosen}")
         raise typer.Exit(code=1)
 
-    console.print(f"[dim]Initializing provider(s):[/dim] [cyan]{', '.join(providers_to_init)}[/cyan]")
-    for pname in providers_to_init:
-        if pname == "gemini":
-            try:
-                _ensure_gemini_provider()
-                console.print("  [green]✓[/green] Gemini ready")
-            except PlaywrightLaunchError as e:
-                console.print(f"  [red]✗[/red] Gemini: {e}")
-                _print_launch_command("http://127.0.0.1:9333")
-        elif pname == "chatgpt":
-            try:
-                _ensure_chatgpt_provider()
-                console.print("  [green]✓[/green] ChatGPT ready")
-            except PlaywrightLaunchError as e:
-                console.print(f"  [red]✗[/red] ChatGPT: {e}")
+    import os as _os
 
+    _os.environ["BRIDGE_INIT_PROVIDERS"] = chosen
+
+    console.print(f"[dim]Provider(s):[/dim] [cyan]{chosen}[/cyan]")
     console.print()
     console.print(f"[dim]API server starting on[/dim] [cyan]{host}:{port}[/cyan]")
     console.print(f"[dim]Docs:[/dim] [cyan]http://{host}:{port}/docs[/cyan]")
     console.print()
 
-    try:
-        uvicorn.run(
-            "subscription_bridge.api.server:app",
-            host=host,
-            port=port,
-            reload=reload,
-            log_level=log_level,
-        )
-    finally:
-        _cleanup_global_browser()
+    uvicorn.run(
+        "subscription_bridge.api.server:app",
+        host=host,
+        port=port,
+        reload=reload,
+        log_level=log_level,
+    )
 
 
 @app.command("stop")

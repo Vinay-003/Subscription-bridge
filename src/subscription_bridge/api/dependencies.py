@@ -33,6 +33,7 @@ class AppDependencies:
         self._session_pool: SessionPool | None = None
         self._playwright_manager: PlaywrightManager | None = None
         self._browser_started = False
+        self._init_lock = asyncio.Lock()
 
     def load_config(self) -> dict[str, Any]:
         self._config = load_config()
@@ -61,14 +62,17 @@ class AppDependencies:
     async def ensure_browser(self) -> None:
         if self._browser_started:
             return
-        config = self.load_config()
-        browser_config = config.get("browser", {})
-        self._playwright_manager = PlaywrightManager(config)
-        await self._playwright_manager.start()
-        max_sessions = int(browser_config.get("max_sessions", 3))
-        ttl = float(browser_config.get("session_ttl_seconds", 600))
-        self._session_pool = SessionPool(max_sessions=max_sessions, session_ttl_seconds=ttl)
-        self._browser_started = True
+        async with self._init_lock:
+            if self._browser_started:
+                return
+            config = self.load_config()
+            browser_config = config.get("browser", {})
+            self._playwright_manager = PlaywrightManager(config)
+            await self._playwright_manager.start()
+            max_sessions = int(browser_config.get("max_sessions", 3))
+            ttl = float(browser_config.get("session_ttl_seconds", 600))
+            self._session_pool = SessionPool(max_sessions=max_sessions, session_ttl_seconds=ttl)
+            self._browser_started = True
 
     async def get_gemini_adapter(self) -> GeminiProviderAdapter:
         if self._gemini_adapter is not None:
