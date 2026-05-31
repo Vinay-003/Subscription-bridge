@@ -491,7 +491,7 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
         prompt=prompt,
         system_prompt=system_prompt or None,
         attachments=attachments or None,
-        require_json=has_tools,
+        require_json=False,
         timeout_seconds=max(req.max_tokens // 100, 30),
         metadata={
             "gemini_model_variant": _gemini_model_variant(req.model)

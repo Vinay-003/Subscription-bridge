@@ -315,9 +315,9 @@ def test_extract_model_variant_from_non_first_line() -> None:
 @pytest.mark.asyncio
 async def test_switch_model_variant_clicks_menu_and_option() -> None:
     page = ModelSwitchPage(should_click=True)
-    async def _always(page: Any, labels: list[str], **kwargs: Any) -> bool:
+    async def _always(page: Any, labels: list[str]) -> bool:
         return True
-    gemini_adapter.safe_click_labels = _always  # type: ignore[assignment]
+    gemini_adapter._click_model_in_overlay = _always  # type: ignore[assignment]
     async def _dismiss(page: Any) -> None:
         return None
     gemini_adapter.dismiss_overlays = _dismiss  # type: ignore[assignment]
@@ -328,9 +328,9 @@ async def test_switch_model_variant_clicks_menu_and_option() -> None:
 @pytest.mark.asyncio
 async def test_switch_model_variant_fails_when_no_match() -> None:
     page = ModelSwitchPage(should_click=False)
-    async def _never(page: Any, labels: list[str], **kwargs: Any) -> bool:
+    async def _never(page: Any, labels: list[str]) -> bool:
         return False
-    gemini_adapter.safe_click_labels = _never  # type: ignore[assignment]
+    gemini_adapter._click_model_in_overlay = _never  # type: ignore[assignment]
     async def _dismiss(page: Any) -> None:
         return None
     gemini_adapter.dismiss_overlays = _dismiss  # type: ignore[assignment]

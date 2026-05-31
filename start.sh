@@ -101,13 +101,27 @@ for i in $(seq 1 15); do
     sleep 1
 done
 
-# ---- 5. Launch bridge API server ----
-echo "[4] Starting bridge API server on port $API_PORT (provider: $PROVIDER)..."
+# ---- 5. Kill any leftover process on API port ----
+API_PID=$(lsof -ti tcp:$API_PORT 2>/dev/null || true)
+if [ -n "$API_PID" ]; then
+    echo "[4] Killing existing process on port $API_PORT (PID $API_PID)..."
+    kill "$API_PID" 2>/dev/null || true
+    for i in $(seq 1 10); do
+        if ! lsof -ti tcp:$API_PORT > /dev/null 2>&1; then
+            echo "     Port freed after ${i}s"
+            break
+        fi
+        sleep 1
+    done
+fi
+
+# ---- 6. Launch bridge API server ----
+echo "[5] Starting bridge API server on port $API_PORT (provider: $PROVIDER)..."
 $BRIDGE server --host 127.0.0.1 --port $API_PORT --provider "$PROVIDER" &
 BRIDGE_PID=$!
 
-# ---- 6. Wait for API server to be ready ----
-echo "[5] Waiting for API server..."
+# ---- 7. Wait for API server to be ready ----
+echo "[6] Waiting for API server..."
 for i in $(seq 1 30); do
     if curl -s http://127.0.0.1:$API_PORT/health > /dev/null 2>&1; then
         echo "     API ready after ${i}s"

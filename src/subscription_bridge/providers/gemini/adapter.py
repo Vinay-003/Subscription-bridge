@@ -351,26 +351,26 @@ def _normalize_variant(name: str) -> str:
 def _variant_aliases(name: str) -> list[str]:
     n = _normalize_variant(name)
     if "flash lite" in n or "flash-lite" in n:
-        return ["3.1 flash-lite", "flash-lite", "flash lite"]
+        return ["flash-lite"]
     if "flash" in n:
-        return ["3.5 flash", "flash"]
+        return ["flash"]
     if "thinking" in n:
-        return ["thinking", "extended"]
+        return ["thinking"]
     if "pro" in n:
-        return ["3.1 pro", "pro"]
+        return ["pro"]
     return [n]
 
 
 def _variant_select_labels(name: str) -> list[str]:
     n = _normalize_variant(name)
     if "flash lite" in n or "flash-lite" in n:
-        return ["3.1 flash-lite", "flash-lite", "flash lite", "lite"]
+        return ["flash-lite", "flash lite", "lite"]
     if "flash" in n:
-        return ["3.5 flash", "flash", "all-around"]
+        return ["flash"]
     if "thinking" in n:
-        return ["thinking", "extended", "standard"]
+        return ["thinking", "extended"]
     if "pro" in n:
-        return ["3.1 pro", "pro", "advanced"]
+        return ["pro", "advanced"]
     return _variant_aliases(name)
 
 
@@ -385,8 +385,8 @@ async def _switch_model_variant(page: Any, variant: str) -> bool:
         loc = page.locator("button[aria-label='Open mode picker']").first
         if await loc.count() > 0 and await loc.is_visible():
             await loc.click()
-            await _async_sleep(0.6)
-            if await safe_click_labels(page, select_labels, timeout=5):
+            await _async_sleep(0.8)
+            if await _click_model_in_overlay(page, select_labels):
                 await _async_sleep(0.6)
                 await dismiss_overlays(page)
                 return True
@@ -397,8 +397,8 @@ async def _switch_model_variant(page: Any, variant: str) -> bool:
         opened = await safe_click_labels(page, open_labels, timeout=4)
         if opened:
             await _async_sleep(0.8)
-            clicked = await safe_click_labels(page, select_labels, timeout=5)
-            await _async_sleep(0.8)
+            clicked = await _click_model_in_overlay(page, select_labels)
+            await _async_sleep(0.6)
             await dismiss_overlays(page)
             if clicked:
                 return True
@@ -411,8 +411,8 @@ async def _switch_model_variant(page: Any, variant: str) -> bool:
                 if await loc.count() > 0 and await loc.is_visible():
                     await loc.click()
                     await _async_sleep(0.8)
-                    clicked = await safe_click_labels(page, select_labels, timeout=5)
-                    await _async_sleep(0.8)
+                    clicked = await _click_model_in_overlay(page, select_labels)
+                    await _async_sleep(0.6)
                     await dismiss_overlays(page)
                     if clicked:
                         return True
@@ -421,6 +421,52 @@ async def _switch_model_variant(page: Any, variant: str) -> bool:
                 continue
         await _async_sleep(0.4)
 
+    return False
+
+
+async def _click_model_in_overlay(page: Any, labels: list[str]) -> bool:
+    labels_json = str(labels)
+    script = f"""
+    (function() {{
+        const labels = {labels_json};
+        const containers = Array.from(document.querySelectorAll(
+            '[role="dialog"], .cdk-overlay-pane, .cdk-overlay-container, [role="menu"], [role="listbox"]'
+        ));
+        for (const container of containers) {{
+            const r = container.getBoundingClientRect();
+            if (r.width === 0 || r.height === 0) continue;
+            const items = container.querySelectorAll(
+                'button, [role="menuitem"], [role="option"], [role="menuitemradio"], ' +
+                '[role="radio"], label, [class*="option"]'
+            );
+            for (const el of items) {{
+                const txt = ((el.getAttribute('aria-label') || '') + ' ' +
+                    (el.getAttribute('title') || '') + ' ' +
+                    (el.innerText || '')).toLowerCase().trim();
+                if (!txt) continue;
+                const cr = el.getBoundingClientRect();
+                if (cr.width === 0 || cr.height === 0) continue;
+                for (const label of labels) {{
+                    if (txt.includes(label)) {{
+                        el.scrollIntoView({{block:'center'}});
+                        el.click();
+                        return true;
+                    }}
+                }}
+            }}
+        }}
+        return false;
+    }})()
+    """
+    try:
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            result = await page.evaluate(script)
+            if result:
+                return True
+            await asyncio.sleep(0.3)
+    except Exception:
+        pass
     return False
 
 
