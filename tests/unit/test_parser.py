@@ -37,6 +37,18 @@ def test_direct_clarification() -> None:
     assert action.question == "Which file?"
 
 
+def test_create_plan() -> None:
+    text = (
+        '{"type":"create_plan","thought":"planning","plan_summary":"write calculator",'
+        '"todos":[{"content":"create file","details":"write calculator.c"},{"content":"compile","details":""}]}'
+    )
+    action = parse_agent_action(text)
+    assert action.action_type == "create_plan"
+    assert action.plan_summary == "write calculator"
+    assert len(action.todos) == 2
+    assert action.todos[0]["content"] == "create file"
+
+
 def test_markdown_wrapped_json() -> None:
     text = "```json\n{\"type\":\"final\",\"thought\":\"done\",\"answer\":\"ok\"}\n```"
     action = parse_agent_action(text)
@@ -72,40 +84,40 @@ def test_smart_quotes_repair() -> None:
     assert '"final"' in repaired
 
 
-def test_unexpected_type() -> None:
+def test_unexpected_type_falls_to_plain_text() -> None:
     text = '{"type":"invalid_type","thought":"x","answer":"y"}'
-    with pytest.raises(ParserError, match="Unknown action type"):
-        parse_agent_action(text)
+    action = parse_agent_action(text)
+    assert action.action_type == "final"
 
 
-def test_missing_tool_name() -> None:
+def test_missing_tool_name_falls_to_plain_text() -> None:
     text = '{"type":"tool_call","thought":"x","arguments":{}}'
-    with pytest.raises(ParserError, match="missing"):
-        parse_agent_action(text)
+    action = parse_agent_action(text)
+    assert action.action_type == "final"
 
 
-def test_missing_answer() -> None:
+def test_missing_answer_falls_to_plain_text() -> None:
     text = '{"type":"final","thought":"x"}'
-    with pytest.raises(ParserError, match="missing"):
-        parse_agent_action(text)
+    action = parse_agent_action(text)
+    assert action.action_type == "final"
 
 
-def test_missing_question() -> None:
+def test_missing_question_falls_to_plain_text() -> None:
     text = '{"type":"ask_clarification","thought":"x"}'
-    with pytest.raises(ParserError, match="missing"):
-        parse_agent_action(text)
+    action = parse_agent_action(text)
+    assert action.action_type == "final"
 
 
-def test_non_dict_json() -> None:
+def test_non_dict_json_falls_to_plain_text() -> None:
     text = '["tool_call", "file_read"]'
-    with pytest.raises(ParserError, match="JSON object"):
-        parse_agent_action(text)
+    action = parse_agent_action(text)
+    assert action.action_type == "final"
 
 
-def test_repair_single_quotes() -> None:
+def test_repair_single_quotes_plain_text_fallback() -> None:
     text = "{'type': 'final', 'thought': 'x', 'answer': 'y'}"
-    with pytest.raises(ParserError):
-        parse_agent_action(text)
+    action = parse_agent_action(text)
+    assert action.action_type == "final"
 
 
 def test_regex_recovery_file_write_with_unescaped_quotes() -> None:
@@ -142,6 +154,88 @@ def test_regex_recovery_bash_command_with_unescaped_quotes() -> None:
     assert action.tool_name == "bash"
     assert "echo \"int main(){\" > a.c" in action.arguments["command"]
     assert 'echo "printf("hi");" >> a.c' in action.arguments["command"]
+
+
+def test_openai_tool_calls_format() -> None:
+    text = (
+        '{"tool_calls":[{"id":"call_1","type":"function",'
+        '"function":{"name":"file_read","arguments":{"path":"test.txt"}}}]}'
+    )
+    action = parse_agent_action(text)
+    assert action.action_type == "tool_call"
+    assert action.tool_name == "file_read"
+    assert action.arguments == {"path": "test.txt"}
+
+
+def test_openai_tool_calls_arguments_as_json_string() -> None:
+    text = (
+        '{"tool_calls": [{"id": "call_1", "type": "function", '
+        '"function": {"name": "file_write", '
+        '"arguments": "{\\"path\\": \\"a.txt\\", \\"content\\": \\"hi\\"}"}}]}'
+    )
+    action = parse_agent_action(text)
+    assert action.action_type == "tool_call"
+    assert action.tool_name == "file_write"
+    assert action.arguments == {"path": "a.txt", "content": "hi"}
+
+
+def test_alternative_action_input_format() -> None:
+    text = '{"action":"file_read","action_input":{"path":"test.txt"}}'
+    action = parse_agent_action(text)
+    assert action.action_type == "tool_call"
+    assert action.tool_name == "file_read"
+    assert action.arguments == {"path": "test.txt"}
+
+
+def test_arguments_as_json_string() -> None:
+    text = (
+        '{"type":"tool_call","tool_name":"file_write",'
+        '"arguments":"{\\"path\\": \\"a.txt\\", \\"content\\": \\"hello\\"}"}'
+    )
+    action = parse_agent_action(text)
+    assert action.action_type == "tool_call"
+    assert action.tool_name == "file_write"
+    assert action.arguments == {"path": "a.txt", "content": "hello"}
+
+
+def test_args_as_pythonish_dict_string() -> None:
+    text = (
+        "{\"type\":\"tool_call\",\"tool_name\":\"file_write\","
+        "\"arguments\": \"{'path': 'a.txt', 'content': 'hello'}\"}"
+    )
+    action = parse_agent_action(text)
+    assert action.action_type == "tool_call"
+    assert action.tool_name == "file_write"
+    assert action.arguments == {"path": "a.txt", "content": "hello"}
+
+
+def test_c_source_content_in_file_write() -> None:
+    text = (
+        '{"type":"tool_call","tool_name":"file_write",'
+        '"arguments":{"path":"calc.c","content":"#include <stdio.h>\\n'
+        'int main() {\\n    printf(\\"Hello\\\\n\\");\\n    return 0;\\n}"}}'
+    )
+    action = parse_agent_action(text)
+    assert action.action_type == "tool_call"
+    assert action.tool_name == "file_write"
+    assert 'printf(' in action.arguments["content"]
+
+
+def test_plain_text_final_fallback() -> None:
+    text = "I have created the file successfully."
+    action = parse_agent_action(text)
+    assert action.action_type == "final"
+    assert action.answer == text
+
+
+def test_empty_text_raises_error() -> None:
+    with pytest.raises(ParserError, match="Cannot parse"):
+        parse_agent_action("")
+
+
+def test_whitespace_only_raises_error() -> None:
+    with pytest.raises(ParserError):
+        parse_agent_action("   \n  \t  ")
 
 
 def test_strip_code_fences() -> None:

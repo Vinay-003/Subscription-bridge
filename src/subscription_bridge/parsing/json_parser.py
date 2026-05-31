@@ -4,40 +4,206 @@ import json
 from typing import Any
 
 from subscription_bridge.core.errors import ParserError
-from subscription_bridge.logging.events import PARSE_FAILED
 from subscription_bridge.logging.logger import get_logger
-from subscription_bridge.parsing.repair import repair_json
+from subscription_bridge.parsing.repair import (
+    extract_first_json,
+    repair_json,
+    strip_code_fences,
+    try_parse_action_input,
+)
 from subscription_bridge.parsing.schemas import AgentAction
 
 logger = get_logger(__name__)
 
 
 def parse_agent_action(text: str) -> AgentAction:
-    try:
-        return _try_direct_parse(text)
-    except json.JSONDecodeError as parse_err:
-        logger.warning(PARSE_FAILED, reason=str(parse_err), text_preview=text[:200])
-        pass
-    except (ValueError, KeyError) as field_err:
-        raise ParserError(raw_text=text, reason=str(field_err)) from field_err
+    candidates = _build_candidates(text)
 
-    repaired = repair_json(text)
-    last_error = ""
-    try:
-        return _try_direct_parse(repaired)
-    except json.JSONDecodeError as e:
-        last_error = str(e)
-        pass
-    except (ValueError, KeyError) as field_err:
-        raise ParserError(raw_text=text, reason=str(field_err)) from field_err
+    for idx, candidate in enumerate(candidates):
+        if not candidate or not candidate.strip():
+            continue
+        result = _try_parse_candidate(candidate)
+        if result is not None:
+            if idx > 0:
+                logger.info(
+                    "parser_candidate_accepted",
+                    candidate_index=idx,
+                    text_preview=candidate[:120],
+                )
+            return result
+
+    result = _plain_text_fallback(text)
+    if result is not None:
+        logger.info("parser_plain_text_fallback", text_preview=text[:120])
+        return result
+
+    msg = "Cannot parse provider response as agent action"
+    raise ParserError(raw_text=text, reason=msg)
+
+
+def _build_candidates(text: str) -> list[str]:
+    candidates: list[str] = []
+
+    candidates.append(text)
+    candidates.append(strip_code_fences(text))
+    candidates.append(extract_first_json(text))
+    candidates.append(repair_json(text))
+
+    seen: set[str] = set()
+    unique: list[str] = []
+    for c in candidates:
+        s = c.strip()
+        if s and s not in seen:
+            seen.add(s)
+            unique.append(s)
+    return unique
+
+
+def _try_parse_candidate(text: str) -> AgentAction | None:
+    result = _try_direct_parse(text)
+    if result is not None:
+        return result
+
+    result = _try_openai_tool_calls(text)
+    if result is not None:
+        return result
+
+    result = _try_alternative_format_parse(text)
+    if result is not None:
+        return result
 
     result = _regex_extract_action(text)
     if result is not None:
         logger.warning("recovered_via_regex", action_type=result.action_type, tool_name=result.tool_name)
         return result
 
-    msg = f"Cannot parse provider response as agent action. After repair: {last_error}"
-    raise ParserError(raw_text=text, reason=msg)
+    return None
+
+
+def _try_direct_parse(text: str) -> AgentAction | None:
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+
+    raw_args = data.get("arguments", {})
+    if isinstance(raw_args, str):
+        parsed = try_parse_action_input(raw_args)
+        if parsed is not None:
+            data["arguments"] = parsed
+        else:
+            data["arguments"] = {"raw": raw_args}
+    elif isinstance(raw_args, dict):
+        data["arguments"] = _normalize_arguments(raw_args)
+
+    try:
+        action = AgentAction.from_dict(data)
+    except (ValueError, KeyError):
+        return None
+
+    if action.action_type == "tool_call" and not action.tool_name:
+        return None
+    if action.action_type == "final" and not action.answer:
+        return None
+    if action.action_type == "ask_clarification" and not action.question:
+        return None
+
+    return action
+
+
+def _normalize_arguments(args: dict[str, Any]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in args.items():
+        if isinstance(value, str):
+            result[key] = value
+        elif isinstance(value, (int, float, bool)):
+            result[key] = str(value)
+        else:
+            result[key] = value
+    return result
+
+
+def _try_openai_tool_calls(text: str) -> AgentAction | None:
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+
+    tool_calls = data.get("tool_calls")
+    if not isinstance(tool_calls, list) or len(tool_calls) == 0:
+        return None
+
+    tc = tool_calls[0]
+    if not isinstance(tc, dict):
+        return None
+
+    fn = tc.get("function", {})
+    if not isinstance(fn, dict):
+        return None
+
+    name = str(fn.get("name", ""))
+    if not name:
+        return None
+
+    args_raw = fn.get("arguments", "{}")
+    parsed: dict[str, Any] = {}
+    if isinstance(args_raw, str):
+        p = try_parse_action_input(args_raw)
+        if p is not None:
+            parsed = p
+        else:
+            parsed = {"raw": args_raw}
+    elif isinstance(args_raw, dict):
+        parsed = args_raw
+
+    return AgentAction(
+        action_type="tool_call",
+        tool_name=name,
+        arguments=parsed,
+        thought=data.get("thought", ""),
+    )
+
+
+def _try_alternative_format_parse(text: str) -> AgentAction | None:
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+
+    action = data.get("action", "")
+    if not action:
+        return None
+
+    action_input_raw = data.get("action_input", data.get("input", "{}"))
+    parsed: dict[str, Any] = {}
+    if isinstance(action_input_raw, str):
+        p = try_parse_action_input(action_input_raw)
+        if p is not None:
+            parsed = p
+        else:
+            parsed = {"raw": action_input_raw}
+    elif isinstance(action_input_raw, dict):
+        parsed = action_input_raw
+
+    return AgentAction(
+        action_type="tool_call",
+        tool_name=action,
+        arguments=parsed,
+        thought=data.get("thought", ""),
+    )
+
+
+def _plain_text_fallback(text: str) -> AgentAction | None:
+    clean = text.strip()
+    if not clean:
+        return None
+    return AgentAction(action_type="final", answer=clean)
 
 
 def _regex_extract_action(text: str) -> AgentAction | None:
@@ -85,12 +251,17 @@ def _regex_extract_action(text: str) -> AgentAction | None:
 
     if '"type":"final"' in text or '"type": "final"' in text:
         m = _re.search(r'"answer"\s*:\s*"((?:[^"\\]|\\.)*)"', text, _re.DOTALL)
-        answer = m.group(1) if m else ""
+        answer = m.group(1).replace('\\"', '"').replace("\\n", "\n").replace("\\t", "\t") if m else ""
+        if not answer:
+            return None
         return AgentAction(action_type="final", answer=answer)
 
     if '"type":"ask_clarification"' in text or '"type": "ask_clarification"' in text:
         m_q = _re.search(r'"question"\s*:\s*"((?:[^"\\]|\\.)*)"', text, _re.DOTALL)
-        return AgentAction(action_type="ask_clarification", question=m_q.group(1) if m_q else "")
+        question = m_q.group(1).replace('\\"', '"').replace("\\n", "\n").replace("\\t", "\t") if m_q else ""
+        if not question:
+            return None
+        return AgentAction(action_type="ask_clarification", question=question)
 
     m_tool = _re.search(r'"tool_name"\s*:\s*"(\w+)"', text)
     if not m_tool:
@@ -104,131 +275,19 @@ def _regex_extract_action(text: str) -> AgentAction | None:
     args: dict[str, str] = {}
 
     for key in ("path", "search", "replace", "content", "command", "pattern", "query", "question"):
+        loose_keys = ("content", "command", "replace", "search")
+        if key in loose_keys:
+            loose = _extract_loose_string_value(text, key)
+            if loose is not None:
+                args[key] = loose
+                continue
         m = _re.search(rf'"{key}"\s*:\s*"((?:[^"\\]|\\.)*)"', text, _re.DOTALL)
         if m:
             val = m.group(1).replace('\\"', '"').replace("\\n", "\n").replace("\\t", "\t")
             args[key] = val
-            continue
-        if key in ("content", "command", "replace", "search"):
-            loose = _extract_loose_string_value(text, key)
-            if loose is not None:
-                args[key] = loose
 
     return AgentAction(
         action_type="tool_call",
         tool_name=tool_name,
         arguments=args,
-    )
-
-
-def _try_direct_parse(text: str) -> AgentAction:
-    data = json.loads(text)
-    if not isinstance(data, dict):
-        raise ValueError(f"Expected JSON object, got {type(data).__name__}")
-
-    action_type = data.get("type", "")
-    if action_type == "tool_call":
-        return _parse_tool_call(data)
-    if action_type == "final":
-        return _parse_final(data)
-    if action_type == "ask_clarification":
-        return _parse_clarification(data)
-
-    result = _try_parse_alternative_formats(data)
-    if result is not None:
-        return result
-
-    valid = ["tool_call", "final", "ask_clarification"]
-    raise ValueError(f"Unknown action type {action_type!r}. Expected one of {valid}")
-
-
-def _try_parse_alternative_formats(data: dict[str, Any]) -> AgentAction | None:
-    from subscription_bridge.parsing.repair import try_parse_action_input
-
-    tool_calls = data.get("tool_calls")
-    if isinstance(tool_calls, list) and len(tool_calls) > 0:
-        tc = tool_calls[0]
-        if isinstance(tc, dict):
-            fn = tc.get("function", {}) if isinstance(tc, dict) else {}
-            if isinstance(fn, dict):
-                name = str(fn.get("name", ""))
-                args_raw = fn.get("arguments", "{}")
-                if isinstance(args_raw, str):
-                    parsed = try_parse_action_input(args_raw)
-                    if parsed is not None:
-                        return AgentAction(
-                            action_type="tool_call",
-                            tool_name=name,
-                            arguments=parsed,
-                            thought=data.get("thought", ""),
-                        )
-                elif isinstance(args_raw, dict):
-                    return AgentAction(
-                        action_type="tool_call",
-                        tool_name=name,
-                        arguments=args_raw,
-                        thought=data.get("thought", ""),
-                    )
-
-    action = data.get("action", "")
-    if action:
-        action_input_raw = data.get("action_input", data.get("input", "{}"))
-        if isinstance(action_input_raw, str):
-            parsed = try_parse_action_input(action_input_raw)
-            if parsed is not None:
-                return AgentAction(
-                    action_type="tool_call",
-                    tool_name=action,
-                    arguments=parsed,
-                    thought=data.get("thought", ""),
-                )
-        elif isinstance(action_input_raw, dict):
-            return AgentAction(
-                action_type="tool_call",
-                tool_name=action,
-                arguments=action_input_raw,
-                thought=data.get("thought", ""),
-            )
-
-    return None
-
-
-def _parse_tool_call(data: dict[str, Any]) -> AgentAction:
-    tool_name = str(data.get("tool_name", ""))
-    if not tool_name:
-        raise ValueError("tool_call missing 'tool_name'")
-
-    arguments = data.get("arguments", {})
-    if not isinstance(arguments, dict):
-        raise ValueError(f"arguments must be a dict, got {type(arguments).__name__}")
-
-    return AgentAction(
-        action_type="tool_call",
-        thought=str(data.get("thought", "")),
-        tool_name=tool_name,
-        arguments=arguments,
-    )
-
-
-def _parse_final(data: dict[str, Any]) -> AgentAction:
-    answer = str(data.get("answer", ""))
-    if not answer:
-        raise ValueError("final action missing 'answer'")
-
-    return AgentAction(
-        action_type="final",
-        thought=str(data.get("thought", "")),
-        answer=answer,
-    )
-
-
-def _parse_clarification(data: dict[str, Any]) -> AgentAction:
-    question = str(data.get("question", ""))
-    if not question:
-        raise ValueError("ask_clarification action missing 'question'")
-
-    return AgentAction(
-        action_type="ask_clarification",
-        thought=str(data.get("thought", "")),
-        question=question,
     )

@@ -5,7 +5,6 @@ from typing import Any
 import pytest
 
 import subscription_bridge.providers.gemini.adapter as gemini_adapter
-
 from subscription_bridge.browser.session_pool import SessionPool
 from subscription_bridge.providers import ProviderRequest
 from subscription_bridge.providers.gemini.adapter import (

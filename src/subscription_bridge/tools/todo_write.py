@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from subscription_bridge.core.plan import TodoStatus
 from subscription_bridge.tools.base import Tool, ToolResult
 
 

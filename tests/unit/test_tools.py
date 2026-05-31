@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from pathlib import Path
 
 import pytest
@@ -187,3 +188,45 @@ async def test_file_read_max_bytes(tmp_workspace: str) -> None:
     result = await tool.run({"path": "long.txt", "workspace": tmp_workspace, "max_bytes": 100})
     assert result.success
     assert len(result.output) < 200
+
+
+@pytest.mark.asyncio
+async def test_file_write_base64_content(tmp_workspace: str) -> None:
+    tool = FileWriteTool()
+    content = "#include <stdio.h>\nint main() { printf(\"hello\\n\"); return 0; }"
+    encoded = base64.b64encode(content.encode("utf-8")).decode("utf-8")
+    result = await tool.run({"path": "calc.c", "content_base64": encoded, "workspace": tmp_workspace})
+    assert result.success
+    written = Path(tmp_workspace) / "calc.c"
+    assert written.read_text() == content
+
+
+@pytest.mark.asyncio
+async def test_file_write_base64_preferred_over_content(tmp_workspace: str) -> None:
+    tool = FileWriteTool()
+    actual = "written from base64"
+    encoded = base64.b64encode(actual.encode("utf-8")).decode("utf-8")
+    result = await tool.run({
+        "path": "test.txt",
+        "content": "should be ignored",
+        "content_base64": encoded,
+        "workspace": tmp_workspace,
+    })
+    assert result.success
+    assert Path(tmp_workspace, "test.txt").read_text() == actual
+
+
+@pytest.mark.asyncio
+async def test_file_write_base64_invalid(tmp_workspace: str) -> None:
+    tool = FileWriteTool()
+    result = await tool.run({"path": "bad.txt", "content_base64": "not-valid-base64!!!", "workspace": tmp_workspace})
+    assert not result.success
+    assert "base64" in result.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_file_write_no_content_no_base64(tmp_workspace: str) -> None:
+    tool = FileWriteTool()
+    result = await tool.run({"path": "empty.txt", "workspace": tmp_workspace})
+    assert not result.success
+    assert "required" in result.error.lower()

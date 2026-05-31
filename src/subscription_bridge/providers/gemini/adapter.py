@@ -5,6 +5,12 @@ from typing import Any
 
 from subscription_bridge.browser.session_pool import SessionPool
 from subscription_bridge.browser.tab_session import TabSession
+from subscription_bridge.browser.ui_guard import (
+    collect_button_diagnostics,
+    dismiss_overlays,
+    safe_click_labels,
+)
+from subscription_bridge.logging.logger import get_logger
 from subscription_bridge.providers.base import (
     ProviderAdapter,
     ProviderCapability,
@@ -29,14 +35,8 @@ from subscription_bridge.providers.gemini.response_reader import (
     wait_for_response_complete,
     wait_for_send_confirmation,
 )
-from subscription_bridge.providers.gemini.upload import UploadError, upload_files
 from subscription_bridge.providers.gemini.selectors import get_selector
-from subscription_bridge.browser.ui_guard import (
-    collect_button_diagnostics,
-    dismiss_overlays,
-    safe_click_labels,
-)
-from subscription_bridge.logging.logger import get_logger
+from subscription_bridge.providers.gemini.upload import UploadError, upload_files
 
 
 class GeminiError(Exception):
@@ -123,8 +123,14 @@ class GeminiProviderAdapter(ProviderAdapter):
 
             from subscription_bridge.providers.gemini.prompt_io import submit_via_enter
             await submit_via_enter(session.page)
+            logger.info("send_method_used", method="enter", run_id=request.run_id)
 
-            accepted = await wait_for_send_confirmation(session.page, timeout=35.0)
+            accepted = await wait_for_send_confirmation(session.page, timeout=15.0)
+            if not accepted:
+                logger.info("send_method_fallback", method="send_button_click", run_id=request.run_id)
+                await _click_send_button(session.page)
+                accepted = await wait_for_send_confirmation(session.page, timeout=20.0)
+
             if not accepted:
                 await session.screenshot_debug("send_not_confirmed")
                 return ProviderResponse(
@@ -286,6 +292,20 @@ class GeminiProviderAdapter(ProviderAdapter):
             return await check_provider_health(session.page)
         finally:
             await self._pool.release(session.session_id)
+
+
+async def _click_send_button(page: Any) -> bool:
+    from subscription_bridge.providers.gemini.selectors import get_selector
+    send_selectors = get_selector("buttons.send")
+    for selector in send_selectors:
+        try:
+            loc = page.locator(selector).first
+            if await loc.count() > 0 and await loc.is_visible():
+                await loc.click()
+                return True
+        except Exception:
+            continue
+    return False
 
 
 async def _async_sleep(seconds: float) -> None:

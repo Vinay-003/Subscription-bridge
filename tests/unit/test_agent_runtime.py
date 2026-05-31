@@ -73,15 +73,15 @@ async def test_runtime_clarification() -> None:
 
 
 @pytest.mark.asyncio
-async def test_runtime_parser_failure_handled() -> None:
+async def test_runtime_parser_plain_text_fallback() -> None:
     provider = _scripted_provider([
         'this is not json at all',
     ])
     runtime = AgentRuntime(provider=provider, tool_registry=_tool_registry(), max_steps=5)
     task = Task(text="test task", workspace=".")
     result = await runtime.run(task)
-    assert not result.success
-    assert "Parser error" in result.error or "parse" in result.error.lower()
+    assert result.success
+    assert result.answer == "this is not json at all"
 
 
 @pytest.mark.asyncio
