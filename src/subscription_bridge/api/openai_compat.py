@@ -32,32 +32,33 @@ from subscription_bridge.api.openai_models import (
     Usage,
 )
 from subscription_bridge.providers.base import ProviderRequest
+from subscription_bridge.workspace import resolve_workspace
 
 router = APIRouter()
-_workspace_locks: dict[str, asyncio.Lock] = {}
-_workspace_locks_guard = asyncio.Lock()
 
 MODEL_FAKE = "subscription-bridge-fake"
-MODEL_GEMINI_FLASH = "subscription-bridge-gemini-flash"
-MODEL_GEMINI_FLASH_LITE = "subscription-bridge-gemini-flash-lite"
+MODEL_GEMINI_FAST = "subscription-bridge-gemini-fast"
+MODEL_GEMINI_THINKING = "subscription-bridge-gemini-thinking"
 MODEL_GEMINI_PRO = "subscription-bridge-gemini-pro"
 MODEL_CHATGPT = "subscription-bridge-chatgpt"
 MODEL_CHATGPT_THINKING = "subscription-bridge-chatgpt-thinking"
 MODEL_CHATGPT_PRO = "subscription-bridge-chatgpt-pro"
 
-# Backward-compatible model aliases
 MODEL_ALIASES: dict[str, str] = {
-    "subscription-bridge-gemini-fast": MODEL_GEMINI_FLASH,
-    "subscription-bridge-gemini-thinking": MODEL_GEMINI_PRO,
+    "subscription-bridge-gemini-flash": MODEL_GEMINI_FAST,
+    "subscription-bridge-gemini-flash-lite": MODEL_GEMINI_FAST,
+    "subscription-bridge-gemini-3-flash": MODEL_GEMINI_FAST,
+    "gemini-2.0-flash": MODEL_GEMINI_FAST,
+    "gemini-2.5-pro": MODEL_GEMINI_PRO,
 }
 
-GEMINI_MODELS = {MODEL_GEMINI_FLASH, MODEL_GEMINI_FLASH_LITE, MODEL_GEMINI_PRO}
+GEMINI_MODELS = {MODEL_GEMINI_FAST, MODEL_GEMINI_THINKING, MODEL_GEMINI_PRO}
 CHATGPT_MODELS = {MODEL_CHATGPT, MODEL_CHATGPT_THINKING, MODEL_CHATGPT_PRO}
 
 MODEL_CONTEXT_LIMITS: dict[str, int] = {
     MODEL_FAKE: 32000,
-    MODEL_GEMINI_FLASH: 1_000_000,
-    MODEL_GEMINI_FLASH_LITE: 1_000_000,
+    MODEL_GEMINI_FAST: 1_000_000,
+    MODEL_GEMINI_THINKING: 192_000,
     MODEL_GEMINI_PRO: 1_000_000,
     MODEL_CHATGPT: 128_000,
     MODEL_CHATGPT_THINKING: 128_000,
@@ -66,8 +67,8 @@ MODEL_CONTEXT_LIMITS: dict[str, int] = {
 
 MODEL_OUTPUT_LIMITS: dict[str, int] = {
     MODEL_FAKE: 8192,
-    MODEL_GEMINI_FLASH: 8192,
-    MODEL_GEMINI_FLASH_LITE: 8192,
+    MODEL_GEMINI_FAST: 8192,
+    MODEL_GEMINI_THINKING: 65536,
     MODEL_GEMINI_PRO: 65536,
     MODEL_CHATGPT: 16384,
     MODEL_CHATGPT_THINKING: 16384,
@@ -75,28 +76,12 @@ MODEL_OUTPUT_LIMITS: dict[str, int] = {
 }
 
 TOOL_CALL_SYSTEM_PROMPT = (
-    "You have access to the following tools. Use them ONLY when you need to perform an action "
-    "(read files, search code, run commands, etc.).\n\n"
-    "{tools_desc}\n\n"
-    "## How to call a tool\n"
-    "When you need to use a tool, respond with EXACTLY this format:\n"
-    '<tool_call>{{"id": "call_1", "type": "function", '
-    '"function": {{"name": "tool_name", "arguments": {{"arg1": "val"}}}}}}</tool_call>\n\n'
-    "Multiple tools in one response:\n"
-    '<tool_call>{{"id": "call_1", "type": "function", '
-    '"function": {{"name": "read_file", "arguments": {{"path": "foo.py"}}}}}}</tool_call>\n'
-    '<tool_call>{{"id": "call_2", "type": "function", '
-    '"function": {{"name": "grep", "arguments": '
-    '{{"pattern": "class Foo", "include": "*.py"}}}}}}</tool_call>\n\n'
-    "## When NOT to call a tool\n"
-    "For simple conversation (greetings, questions about yourself, etc.), respond with plain text only. "
-    "Do NOT invent tool calls. Only use a tool when it is genuinely needed for the task.\n\n"
-    "## Important rules\n"
-    "- The arguments field MUST be a valid JSON object string\n"
-    "- The id field should be unique per call (e.g., call_1, call_2, ...)\n"
-    "- Do NOT include any text before or after the <tool_call> tags when calling tools\n"
-    "- If you need to explain something AND call a tool, put your explanation in a normal assistant response first, "
-    "then the tool calls will be processed separately"
+    'You have access to tools. When you need to use a tool, '
+    'respond with a JSON object: {{"tool_calls": [{{"id": "call_1", '
+    '"type": "function", "function": {{"name": "tool_name", '
+    '"arguments": {{"arg1": "value1"}}}}}}]}}\n\n'
+    "Available tools:\n{tools_desc}\n\n"
+    "If you do not need a tool, respond normally with plain text."
 )
 
 
@@ -108,14 +93,11 @@ def _get_deps(request: Request) -> AppDependencies:
 def _build_models() -> list[OpenAIModel]:
     models = [OpenAIModel(id=MODEL_FAKE, owned_by="subscription-bridge")]
     if importlib.util.find_spec("subscription_bridge.providers.gemini"):
-        for mid in [MODEL_GEMINI_FLASH, MODEL_GEMINI_FLASH_LITE, MODEL_GEMINI_PRO]:
+        for mid in [MODEL_GEMINI_FAST, MODEL_GEMINI_THINKING, MODEL_GEMINI_PRO]:
             models.append(OpenAIModel(id=mid, owned_by="subscription-bridge"))
     if importlib.util.find_spec("subscription_bridge.providers.chatgpt"):
         for mid in [MODEL_CHATGPT, MODEL_CHATGPT_THINKING, MODEL_CHATGPT_PRO]:
             models.append(OpenAIModel(id=mid, owned_by="subscription-bridge"))
-    for alias, canonical in MODEL_ALIASES.items():
-        if any(m.id == canonical for m in models):
-            models.append(OpenAIModel(id=alias, owned_by="subscription-bridge"))
     return models
 
 
@@ -138,6 +120,13 @@ def _estimate_tokens(text: str) -> int:
 def _strip_provider_prefix(model_id: str) -> str:
     if "/" in model_id:
         return model_id.split("/", 1)[1]
+    return model_id
+
+
+def _resolve_model_alias(model_id: str) -> str:
+    stripped = _strip_provider_prefix(model_id)
+    if stripped in MODEL_ALIASES:
+        return MODEL_ALIASES[stripped]
     return model_id
 
 
@@ -172,15 +161,11 @@ def _check_context_limit(req: ChatCompletionRequest) -> JSONResponse | None:
 
 def _gemini_model_variant(model_id: str) -> str:
     mapping = {
-        MODEL_GEMINI_FLASH: "3.5 Flash",
-        MODEL_GEMINI_FLASH_LITE: "3.1 Flash-Lite",
-        MODEL_GEMINI_PRO: "3.1 Pro",
+        MODEL_GEMINI_FAST: "Gemini 3 Flash",
+        MODEL_GEMINI_THINKING: "Gemini 3 Deep Think",
+        MODEL_GEMINI_PRO: "Gemini 3.1 Pro",
     }
-    return mapping.get(_strip_provider_prefix(model_id), "3.5 Flash")
-
-
-def _gemini_thinking_enabled(model_id: str) -> bool:
-    return False
+    return mapping.get(_strip_provider_prefix(model_id), "Gemini 3 Flash")
 
 
 def _chatgpt_model_variant(model_id: str) -> str:
@@ -199,6 +184,16 @@ def _with_model_hint(prompt: str, variant: str) -> str:
     return f"{header}\n{prompt}"
 
 
+def _resolve_agent_answer(result: Any) -> str:
+    if result.answer:
+        return result.answer
+    if result.needs_clarification and result.question:
+        return result.question
+    if result.error:
+        return f"Error: {result.error}"
+    return "No answer generated"
+
+
 def _conversation_id(messages: list[Any]) -> str:
     import hashlib
     raw = "|".join(
@@ -206,148 +201,6 @@ def _conversation_id(messages: list[Any]) -> str:
         for m in messages[:6]
     )
     return "conv-" + hashlib.md5(raw.encode()).hexdigest()[:12]
-
-
-def _normalize_workspace(value: str | None) -> str | None:
-    if not value or not isinstance(value, str):
-        return None
-    try:
-        resolved = os.path.expanduser(value)
-        resolved = os.path.abspath(resolved)
-    except Exception:
-        return None
-    if os.path.isdir(resolved):
-        return resolved
-    return None
-
-
-def _workspace_from_messages(messages: list[Any]) -> str | None:
-    import re
-
-    patterns = [
-        r"workspace\s*[:=]\s*`?(/[^\s`]+)`?",
-        r"project\s*(?:root|dir|directory)?\s*[:=]\s*`?(/[^\s`]+)`?",
-        r"working\s*directory\s*[:=]\s*`?(/[^\s`]+)`?",
-        r"cwd\s*[:=]\s*`?(/[^\s`]+)`?",
-    ]
-    for msg in messages:
-        if not isinstance(msg.content, str):
-            continue
-        text = msg.content
-        for pat in patterns:
-            m = re.search(pat, text, re.IGNORECASE)
-            if m:
-                candidate = m.group(1).strip()
-                candidate = candidate.rstrip(".,;:>)\"]}'")
-                normalized = _normalize_workspace(candidate)
-                if normalized:
-                    return normalized
-    return None
-
-
-def _workspace_from_opencode_db(model_id: str | None = None) -> str | None:
-    import sqlite3
-
-    data_home = os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share"))
-    db_path = os.environ.get("OPENCODE_DB_PATH", os.path.join(data_home, "opencode", "opencode.db"))
-    if not os.path.isfile(db_path):
-        return None
-    try:
-        conn = sqlite3.connect(db_path, timeout=0.2)
-    except Exception:
-        return None
-    try:
-        cursor = conn.cursor()
-        if model_id:
-            cursor.execute(
-                "select m.data, s.directory from message m "
-                "join session s on s.id = m.session_id "
-                "where m.data like ? "
-                "and m.data like ? "
-                "and s.directory is not null and s.directory != '' "
-                "and (s.time_archived is null or s.time_archived = 0) "
-                "order by m.time_updated desc limit 50",
-                (
-                    '%"providerID":"subscription-bridge"%',
-                    f'%"modelID":"{_strip_provider_prefix(model_id)}"%',
-                ),
-            )
-            rows = cursor.fetchall()
-            for row in rows:
-                if not row:
-                    continue
-                msg_data = row[0] if len(row) > 0 else None
-                session_dir = row[1] if len(row) > 1 else None
-                try:
-                    parsed = json.loads(msg_data) if isinstance(msg_data, str) else {}
-                except Exception:
-                    parsed = {}
-                if isinstance(parsed, dict):
-                    path_obj = parsed.get("path")
-                    if isinstance(path_obj, dict):
-                        cwd = path_obj.get("cwd")
-                        normalized = _normalize_workspace(str(cwd) if cwd else None)
-                        if normalized:
-                            return normalized
-                normalized_session_dir = _normalize_workspace(str(session_dir) if session_dir else None)
-                if normalized_session_dir:
-                    return normalized_session_dir
-
-        cursor.execute(
-            "select s.directory from session s "
-            "where s.directory is not null and s.directory != '' "
-            "and (s.time_archived is null or s.time_archived = 0) "
-            "order by s.time_updated desc limit 1"
-        )
-        row = cursor.fetchone()
-        if row and row[0]:
-            normalized = _normalize_workspace(str(row[0]))
-            if normalized:
-                return normalized
-        cursor.execute(
-            "select worktree from project where worktree is not null "
-            "and worktree != '' order by time_updated desc limit 1"
-        )
-        row = cursor.fetchone()
-        if row and row[0]:
-            normalized = _normalize_workspace(str(row[0]))
-            if normalized:
-                return normalized
-        return None
-    except Exception:
-        return None
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
-
-
-def _resolve_workspace(req: ChatCompletionRequest, request: Request) -> tuple[str, str]:
-    headers = [
-        ("x-workspace-root", request.headers.get("x-workspace-root")),
-        ("x-workspace", request.headers.get("x-workspace")),
-        ("x-opencode-workspace", request.headers.get("x-opencode-workspace")),
-        ("x-opencode-project", request.headers.get("x-opencode-project")),
-    ]
-    for name, raw in headers:
-        normalized = _normalize_workspace(raw)
-        if normalized:
-            return normalized, name
-
-    normalized = _normalize_workspace(req.workspace)
-    if normalized:
-        return normalized, "body"
-
-    from_messages = _workspace_from_messages(req.messages)
-    if from_messages:
-        return from_messages, "messages"
-
-    from_opencode = _workspace_from_opencode_db(req.model)
-    if from_opencode:
-        return from_opencode, "opencode_db"
-
-    return os.path.abspath("."), "default"
 
 
 def _resolve_mode(request: Request) -> str:
@@ -381,22 +234,6 @@ def _title_from_messages(messages: list[Any]) -> str:
     if len(title) > 50:
         title = title[:50].rstrip()
     return title
-
-
-async def _get_workspace_lock(workspace: str) -> asyncio.Lock:
-    async with _workspace_locks_guard:
-        lock = _workspace_locks.get(workspace)
-        if lock is None:
-            lock = asyncio.Lock()
-            _workspace_locks[workspace] = lock
-        return lock
-
-
-def _resolve_model_alias(model_id: str) -> str:
-    stripped = _strip_provider_prefix(model_id)
-    if stripped in MODEL_ALIASES:
-        return MODEL_ALIASES[stripped]
-    return model_id
 
 
 async def _resolve_adapter(model_id: str, deps: AppDependencies) -> Any | None:
@@ -458,6 +295,7 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
         return _error_json(str(e), code="invalid_request_error", status_code=422)
 
     req.model = _resolve_model_alias(req.model)
+    log.info("model_resolved", original=body.get("model"), resolved=req.model)
 
     ctx_error = _check_context_limit(req)
     if ctx_error is not None:
@@ -492,11 +330,14 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
         require_json_tools=has_tools,
     )
 
-    resolved_workspace, workspace_source = _resolve_workspace(req, request)
-    log.info("workspace_resolved", workspace=resolved_workspace, source=workspace_source)
+    workspace_resolution = resolve_workspace(req, request)
+    log.info("workspace_resolved", workspace=workspace_resolution.path, source=workspace_resolution.source)
 
     if _strip_provider_prefix(req.model) in GEMINI_MODELS:
         variant = _gemini_model_variant(req.model)
+        prompt = _with_model_hint(prompt, variant)
+    elif _strip_provider_prefix(req.model) in CHATGPT_MODELS:
+        variant = _chatgpt_model_variant(req.model)
         prompt = _with_model_hint(prompt, variant)
 
     attachments: list[str] = []
@@ -509,52 +350,66 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
         prompt=prompt,
         system_prompt=system_prompt or None,
         attachments=attachments or None,
-        require_json=False,
+        require_json=has_tools,
         timeout_seconds=max(req.max_tokens // 100, 30),
         metadata={
             "gemini_model_variant": _gemini_model_variant(req.model)
             if _strip_provider_prefix(req.model) in GEMINI_MODELS
             else None,
-            "gemini_thinking": _gemini_thinking_enabled(req.model),
             "chatgpt_model_variant": _chatgpt_model_variant(req.model)
             if _strip_provider_prefix(req.model) in CHATGPT_MODELS
             else None,
         },
     )
 
-    if req.stream:
+    if req.stream and provider_adapter is not None and provider_adapter.name == "fake":
         return StreamingResponse(
-            _stream_response(provider_adapter, provider_req, req.model, has_tools=has_tools),
+            _stream_response(provider_adapter, provider_req, req.model),
             media_type="text/event-stream",
         )
 
+    # OpenAI compatibility mode is a model gateway. It may return tool_calls,
+    # but it never executes local tools; clients such as OpenCode own execution.
     response = await provider_adapter.send_prompt(provider_req)
     _cleanup_temp_files(attachments)
 
     if not response.success:
         return _error_json(response.error or "Provider error", code="provider_error", status_code=502)
 
-    reply_text = response.text or ""
-
-    if has_tools:
-        tool_calls = _parse_tool_calls(reply_text)
-        if tool_calls:
-            message = ResponseMessage(role="assistant", content=None, tool_calls=tool_calls)
-            finish_reason = "tool_calls"
-        else:
-            message = ResponseMessage(role="assistant", content=reply_text)
-            finish_reason = "stop"
-    else:
-        message = ResponseMessage(role="assistant", content=reply_text)
-        finish_reason = "stop"
+    parsed_tool_calls = _parse_tool_calls(response.text) if has_tools else []
+    if parsed_tool_calls:
+        for idx, tool_call in enumerate(parsed_tool_calls, start=1):
+            if not tool_call.id:
+                tool_call.id = f"call_{idx}"
+        return ChatCompletionResponse(
+            id=f"chatcmpl-{uuid.uuid4().hex[:12]}", created=int(time.time()), model=req.model,
+            choices=[
+                Choice(
+                    index=0,
+                    message=ResponseMessage(role="assistant", content=None, tool_calls=parsed_tool_calls),
+                    finish_reason="tool_calls",
+                )
+            ],
+            usage=Usage(
+                prompt_tokens=_estimate_tokens(prompt),
+                completion_tokens=_estimate_tokens(response.text),
+                total_tokens=_estimate_tokens(prompt) + _estimate_tokens(response.text),
+            ),
+        )
 
     return ChatCompletionResponse(
         id=f"chatcmpl-{uuid.uuid4().hex[:12]}", created=int(time.time()), model=req.model,
-        choices=[Choice(index=0, message=message, finish_reason=finish_reason)],
+        choices=[
+            Choice(
+                index=0,
+                message=ResponseMessage(content=response.text),
+                finish_reason="stop",
+            )
+        ],
         usage=Usage(
             prompt_tokens=_estimate_tokens(prompt),
-            completion_tokens=_estimate_tokens(reply_text),
-            total_tokens=_estimate_tokens(prompt) + _estimate_tokens(reply_text),
+            completion_tokens=_estimate_tokens(response.text),
+            total_tokens=_estimate_tokens(prompt) + _estimate_tokens(response.text),
         ),
     )
 
@@ -586,38 +441,30 @@ def _convert_messages(
                     conversation.append(f"Assistant (tool call): {name}({args})")
             if text:
                 conversation.append(f"Assistant: {text}")
-            elif not msg.tool_calls:
-                conversation.append("Assistant: (no response)")
         elif role == "tool":
-            tid = ""
+            name = ""
             if hasattr(msg, "tool_call_id") and msg.tool_call_id:
-                tid = f"({msg.tool_call_id}) "
-            conversation.append(f"Tool result{tid}: {text[:2000]}")
+                name = f" (call: {msg.tool_call_id})"
+            conversation.append(f"Tool result{name}: {text[:1000]}")
 
     if tools and require_json_tools:
+        import json as _json
         tools_desc_lines = []
         for t in tools:
-            fn = t.get("function", t) if isinstance(t, dict) else {}
-            fname = fn.get("name", "?") if isinstance(fn, dict) else "?"
-            fdesc = fn.get("description", "") if isinstance(fn, dict) else ""
-            fparams = fn.get("parameters", {}) if isinstance(fn, dict) else {}
-            params_str = json.dumps(fparams)[:500]
-            tools_desc_lines.append(f"  - {fname}: {fdesc}")
-            if fparams:
-                tools_desc_lines.append(f"    Parameters: {params_str}")
-        tools_prompt = TOOL_CALL_SYSTEM_PROMPT.format(
-            tools_desc="\n".join(tools_desc_lines) if tools_desc_lines else "  (no tools defined)"
-        )
+            fname = t.get("function", t).get("name", "?") if isinstance(t, dict) else "?"
+            fdesc = t.get("function", t).get("description", "") if isinstance(t, dict) else ""
+            fparams = t.get("function", t).get("parameters", {}) if isinstance(t, dict) else {}
+            tools_desc_lines.append(f"  {fname}: {fdesc} | args: {_json.dumps(fparams)[:300]}")
+        tools_prompt = TOOL_CALL_SYSTEM_PROMPT.format(tools_desc="\n".join(tools_desc_lines))
         system_parts.append(tools_prompt)
 
     system_prompt = "\n".join(system_parts) if system_parts else ""
 
-    if not conversation:
-        return "", system_prompt
-
-    parts = ["## Conversation"]
-    parts.extend(conversation)
-    parts.append("## Assistant Response")
+    parts: list[str] = []
+    if conversation:
+        parts.append("Conversation:")
+        parts.extend(conversation)
+        parts.append("")
 
     prompt = "\n".join(parts).strip()
     return prompt, system_prompt
@@ -695,177 +542,167 @@ def _cleanup_temp_files(paths: list[str]) -> None:
 
 
 def _parse_tool_calls(text: str) -> list[ToolCall]:
-    """Extract ToolCall objects from model response text.
-
-    Tries, in order:
-    1. <tool_call> XML tags
-    2. ```json ... ``` code blocks containing tool_calls
-    3. Top-level JSON object with tool_calls key
-    4. Regex fallback for partial JSON
-    """
-    import json as _json
-    import re as _re
-
+    import json
     text = text.strip()
-    raw_calls: list[dict[str, Any]] = []
+    if not text:
+        return []
 
-    # 1. <tool_call> XML tags — the recommended format
-    tag_pattern = _re.compile(r'<tool_call>(.*?)</tool_call>', _re.DOTALL)
-    for match in tag_pattern.finditer(text):
-        block = match.group(1).strip()
-        block = block.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-        try:
-            parsed = _json.loads(block)
-            if isinstance(parsed, dict):
-                raw_calls.append(parsed)
-            elif isinstance(parsed, list):
-                raw_calls.extend(parsed)
-        except _json.JSONDecodeError:
-            pass
-    if raw_calls:
-        return _normalize_tool_calls(raw_calls)
+    def _to_tool_call(data: dict) -> ToolCall:
+        fn = data.get("function", {})
+        if isinstance(fn, dict):
+            args = fn.get("arguments", "{}")
+            if not isinstance(args, str):
+                args = json.dumps(args)
+            return ToolCall(
+                id=data.get("id", ""),
+                type=data.get("type", "function"),
+                function=FunctionCall(name=fn.get("name", ""), arguments=args),
+            )
+        return ToolCall(
+            id=data.get("id", ""),
+            type="function",
+            function=FunctionCall(
+                name=data.get("name", ""),
+                arguments=json.dumps(data.get("arguments", {})),
+            ),
+        )
 
-    # 2. ```json code blocks
-    code_block = _re.search(r'```(?:json)?\s*\n?(.*?)\n?```', text, _re.DOTALL)
-    if code_block:
-        block = code_block.group(1).strip()
-        try:
-            data = _json.loads(block)
-            if isinstance(data, dict) and "tool_calls" in data:
-                raw_calls = data["tool_calls"] if isinstance(data["tool_calls"], list) else []
-                if raw_calls:
-                    return _normalize_tool_calls(raw_calls)
-            if isinstance(data, list):
-                return _normalize_tool_calls(data)
-            if isinstance(data, dict):
-                raw_calls = [data]
-                return _normalize_tool_calls(raw_calls)
-        except _json.JSONDecodeError:
-            pass
+    def _ensure_function_wrapper(data: dict) -> dict:
+        if "function" not in data and "name" in data:
+            return {
+                "id": data.get("id", ""),
+                "type": "function",
+                "function": {
+                    "name": data["name"],
+                    "arguments": json.dumps(data.get("arguments", {})),
+                },
+            }
+        return data
 
-    # 3. Whole text is JSON
+    # 1. XML tags: <tool_call>{...}</tool_call>
+    import re
+    xml_calls = re.findall(r'<tool_call>(.*?)</tool_call>', text, re.DOTALL)
+    if xml_calls:
+        results = []
+        for raw in xml_calls:
+            try:
+                data = json.loads(raw.strip())
+                if isinstance(data, dict):
+                    data = _ensure_function_wrapper(data)
+                    results.append(_to_tool_call(data))
+            except json.JSONDecodeError:
+                pass
+        if results:
+            return results
+
+    # 2. Plain JSON with "tool_calls" key
     try:
-        data = _json.loads(text)
+        data = json.loads(text)
         if isinstance(data, dict) and "tool_calls" in data:
             raw = data["tool_calls"]
-            raw_calls = list(raw) if isinstance(raw, list) else []
-            if raw_calls:
-                return _normalize_tool_calls(raw_calls)
+            raw_list = list(raw) if isinstance(raw, list) else []
+            return [_to_tool_call(_ensure_function_wrapper(tc)) for tc in raw_list if isinstance(tc, dict)]
         if isinstance(data, list):
-            return _normalize_tool_calls(data)
-    except _json.JSONDecodeError:
+            return [_to_tool_call(_ensure_function_wrapper(tc)) for tc in data if isinstance(tc, dict)]
+        if isinstance(data, dict) and "name" in data:
+            return [_to_tool_call(_ensure_function_wrapper(data))]
+    except json.JSONDecodeError:
         pass
+
+    # 3. Code block fallback
+    code_block = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
+    if code_block:
+        try:
+            data = json.loads(code_block.group(1).strip())
+            if isinstance(data, dict) and "tool_calls" in data:
+                raw = data["tool_calls"]
+                raw_list = list(raw) if isinstance(raw, list) else []
+                return [_to_tool_call(_ensure_function_wrapper(tc)) for tc in raw_list if isinstance(tc, dict)]
+            if isinstance(data, dict) and "name" in data:
+                return [_to_tool_call(_ensure_function_wrapper(data))]
+            if isinstance(data, list) and data and isinstance(data[0], dict) and "name" in data[0]:
+                return [_to_tool_call(_ensure_function_wrapper(tc)) for tc in data]
+        except json.JSONDecodeError:
+            pass
+
+    # 4. Regex find JSON with "function" or "tool_calls" key
+    for pat in [r'\{[^{}]*"function"[^{}]*\{[^}]*\}[^{}]*\}', r'\{[^{}]*"tool_calls"[^{}]*\}']:
+        m = re.search(pat, text, re.DOTALL)
+        if m:
+            try:
+                data = json.loads(m.group(0))
+                if isinstance(data, dict) and "function" in data:
+                    return [_to_tool_call(data)]
+                if isinstance(data, dict) and "tool_calls" in data:
+                    raw = data["tool_calls"]
+                    raw_list = list(raw) if isinstance(raw, list) else []
+                    return [_to_tool_call(_ensure_function_wrapper(tc)) for tc in raw_list if isinstance(tc, dict)]
+            except json.JSONDecodeError:
+                pass
 
     return []
-
-
-def _normalize_tool_calls(raw_calls: list[dict[str, Any]]) -> list[ToolCall]:
-    """Normalize raw tool call dicts into ToolCall Pydantic objects."""
-    result: list[ToolCall] = []
-    for i, raw in enumerate(raw_calls):
-        if not isinstance(raw, dict):
-            continue
-        call_id = raw.get("id", f"call_{i}")
-        call_type = raw.get("type", "function")
-        fn_raw = raw.get("function", raw)
-        fn_name = ""
-        if isinstance(fn_raw, dict):
-            fn_name = fn_raw.get("name", str(raw.get("name", "")))
-            args_val = fn_raw.get("arguments", raw.get("arguments", "{}"))
-        else:
-            fn_name = str(raw.get("name", ""))
-            args_val = raw.get("arguments", "{}")
-        if not isinstance(args_val, str):
-            try:
-                args_val = json.dumps(args_val)
-            except Exception:
-                args_val = "{}"
-        args_val = _ensure_json_string(args_val)
-        result.append(
-            ToolCall(
-                id=call_id,
-                type=call_type,
-                function=FunctionCall(name=fn_name, arguments=args_val),
-            )
-        )
-    return result
-
-
-def _ensure_json_string(s: str) -> str:
-    """Ensure s is a valid JSON string — if not, wrap it in quotes."""
-    import json as _json
-    s = s.strip()
-    try:
-        _json.loads(s)
-        return s
-    except _json.JSONDecodeError:
-        pass
-    try:
-        return _json.dumps(s)
-    except Exception:
-        return '"{}"'
 
 
 async def _stream_response(
     adapter: Any,
     request: ProviderRequest,
     model: str,
-    has_tools: bool = False,
 ) -> AsyncGenerator[str, None]:
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     now = int(time.time())
 
-    yield _stream_chunk(completion_id, now, model, role="assistant")
+    role_chunk = ChatCompletionChunk(
+        id=completion_id, created=now, model=model,
+        choices=[ChoiceDelta(index=0, delta=DeltaMessage(role="assistant"), finish_reason=None)],
+    )
+    yield f"data: {role_chunk.model_dump_json()}\n\n"
 
     response = await adapter.send_prompt(request)
-    text = (response.text or "") if response.success else ""
 
-    if has_tools:
-        tool_calls = _parse_tool_calls(text)
-        if tool_calls:
-            for tc in tool_calls:
-                yield _stream_chunk(
-                    completion_id, now, model,
-                    tool_calls=[tc.model_dump()],
-                )
-            yield _stream_chunk(completion_id, now, model, finish_reason="tool_calls")
-            yield "data: [DONE]\n\n"
-            return
-
-    if text:
+    if response.success and response.text:
+        text = response.text
         chunk_size = max(len(text) // 10, 5)
         for i in range(0, len(text), chunk_size):
-            yield _stream_chunk(
-                completion_id, now, model,
-                content=text[i : i + chunk_size],
+            chunk_text = text[i : i + chunk_size]
+            content_chunk = ChatCompletionChunk(
+                id=completion_id, created=now, model=model,
+                choices=[ChoiceDelta(index=0, delta=DeltaMessage(content=chunk_text), finish_reason=None)],
             )
+            yield f"data: {content_chunk.model_dump_json()}\n\n"
             await asyncio.sleep(0.01)
 
-    yield _stream_chunk(completion_id, now, model, finish_reason="stop")
+    stop_chunk = ChatCompletionChunk(
+        id=completion_id, created=now, model=model,
+        choices=[ChoiceDelta(index=0, delta=DeltaMessage(), finish_reason="stop")],
+    )
+    yield f"data: {stop_chunk.model_dump_json()}\n\n"
     yield "data: [DONE]\n\n"
 
 
-def _stream_chunk(
-    completion_id: str,
-    created: int,
-    model: str,
-    role: str | None = None,
-    content: str | None = None,
-    tool_calls: list[dict[str, Any]] | None = None,
-    finish_reason: str | None = None,
-) -> str:
-    delta = DeltaMessage(
-        role=role,
-        content=content,
-        tool_calls=tool_calls,
+async def _stream_agent_answer(answer: str, model: str) -> AsyncGenerator[str, None]:
+    completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+    now = int(time.time())
+    role_chunk = ChatCompletionChunk(
+        id=completion_id, created=now, model=model,
+        choices=[ChoiceDelta(index=0, delta=DeltaMessage(role="assistant"), finish_reason=None)],
     )
-    chunk = ChatCompletionChunk(
-        id=completion_id,
-        created=created,
-        model=model,
-        choices=[ChoiceDelta(index=0, delta=delta, finish_reason=finish_reason)],
+    yield f"data: {role_chunk.model_dump_json()}\n\n"
+    if answer:
+        chunk_size = max(len(answer) // 10, 5)
+        for i in range(0, len(answer), chunk_size):
+            chunk_text = answer[i:i + chunk_size]
+            content_chunk = ChatCompletionChunk(
+                id=completion_id, created=now, model=model,
+                choices=[ChoiceDelta(index=0, delta=DeltaMessage(content=chunk_text), finish_reason=None)],
+            )
+            yield f"data: {content_chunk.model_dump_json()}\n\n"
+            await asyncio.sleep(0.01)
+    stop_chunk = ChatCompletionChunk(
+        id=completion_id, created=now, model=model,
+        choices=[ChoiceDelta(index=0, delta=DeltaMessage(), finish_reason="stop")],
     )
-    return f"data: {chunk.model_dump_json()}\n\n"
+    yield f"data: {stop_chunk.model_dump_json()}\n\n"
+    yield "data: [DONE]\n\n"
 
 
 async def _error_stream(message: str) -> AsyncGenerator[str, None]:

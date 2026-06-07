@@ -127,6 +127,15 @@ async def test_bash_success(tmp_workspace: str) -> None:
 
 
 @pytest.mark.asyncio
+async def test_bash_nonzero_exit_is_failure(tmp_workspace: str) -> None:
+    tool = BashTool()
+    result = await tool.run({"command": "false", "workspace": tmp_workspace, "timeout": 5})
+    assert not result.success
+    assert result.error == "Command exited with code 1"
+    assert result.metadata["exit_code"] == 1
+
+
+@pytest.mark.asyncio
 async def test_bash_timeout(tmp_workspace: str) -> None:
     tool = BashTool()
     result = await tool.run({"command": "sleep 10", "workspace": tmp_workspace, "timeout": 1})

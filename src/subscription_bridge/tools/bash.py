@@ -93,8 +93,9 @@ class BashTool(Tool):
             if exit_code != 0:
                 return ToolResult(
                     name=self.name,
-                    success=True,
+                    success=False,
                     output=output,
+                    error=f"Command exited with code {exit_code}",
                     metadata={"exit_code": exit_code},
                 )
 

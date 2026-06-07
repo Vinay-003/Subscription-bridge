@@ -242,3 +242,100 @@ def test_v1_tools_accepted_without_execution(client: TestClient) -> None:
     assert response.status_code == 200
     data = response.json()
     assert data["choices"][0]["message"]["content"] is not None
+
+
+def test_v1_tools_returns_openai_tool_calls(monkeypatch: pytest.MonkeyPatch, client: TestClient) -> None:
+    from subscription_bridge.providers.base import ProviderRequest, ProviderResponse
+
+    class BrowserLikeProvider:
+        name = "gemini"
+
+        async def send_prompt(self, request: ProviderRequest) -> ProviderResponse:
+            text = '{"tool_calls":[{"function":{"name":"file_read","arguments":{"path":"README.md"}}}]}'
+            return ProviderResponse(
+                provider=self.name,
+                text=text,
+                raw_text=text,
+                success=True,
+                latency_seconds=0.0,
+            )
+
+    async def resolve_adapter(model_id: str, deps: object) -> BrowserLikeProvider:
+        return BrowserLikeProvider()
+
+    monkeypatch.setattr("subscription_bridge.api.openai_compat._resolve_adapter", resolve_adapter)
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "subscription-bridge-gemini-fast",
+            "messages": [{"role": "user", "content": "Read README.md"}],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "file_read",
+                        "description": "Read a file",
+                        "parameters": {"type": "object"},
+                    },
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    choice = data["choices"][0]
+    assert choice["finish_reason"] == "tool_calls"
+    assert choice["message"]["content"] is None
+    assert choice["message"]["tool_calls"][0]["id"] == "call_1"
+    assert choice["message"]["tool_calls"][0]["function"]["name"] == "file_read"
+
+
+def test_v1_tools_does_not_start_hidden_agent(monkeypatch: pytest.MonkeyPatch, client: TestClient) -> None:
+    from subscription_bridge.providers.base import ProviderRequest, ProviderResponse
+
+    class BrowserLikeProvider:
+        name = "gemini"
+
+        async def send_prompt(self, request: ProviderRequest) -> ProviderResponse:
+            return ProviderResponse(
+                provider=self.name,
+                text="Plain model answer",
+                raw_text="Plain model answer",
+                success=True,
+                latency_seconds=0.0,
+            )
+
+    class ExplodingAgentRuntime:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            raise AssertionError("OpenAI compatibility endpoint must not start AgentRuntime")
+
+    async def resolve_adapter(model_id: str, deps: object) -> BrowserLikeProvider:
+        return BrowserLikeProvider()
+
+    monkeypatch.setattr("subscription_bridge.api.openai_compat._resolve_adapter", resolve_adapter)
+    monkeypatch.setattr("subscription_bridge.core.AgentRuntime", ExplodingAgentRuntime)
+
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "subscription-bridge-gemini-fast",
+            "messages": [{"role": "user", "content": "Use tools if needed"}],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "file_read",
+                        "description": "Read a file",
+                        "parameters": {"type": "object"},
+                    },
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["choices"][0]["finish_reason"] == "stop"
+    assert data["choices"][0]["message"]["content"] == "Plain model answer"
