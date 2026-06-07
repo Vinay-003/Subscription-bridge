@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from subscription_bridge.api.dependencies import AppDependencies
+from subscription_bridge.api.native.router import router as native_agent_router
 from subscription_bridge.api.openai_compat import router as openai_router
 from subscription_bridge.api.routes import router
 from subscription_bridge.core.errors import ParserError
@@ -86,6 +87,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(router)
+    app.include_router(native_agent_router)
     app.include_router(openai_router)
 
     @app.exception_handler(ParserError)

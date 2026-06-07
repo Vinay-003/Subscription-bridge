@@ -188,6 +188,17 @@ def test_v1_native_run_still_works(client: TestClient) -> None:
     assert "run_id" in data
 
 
+def test_native_agent_runs_endpoint(client: TestClient) -> None:
+    response = client.post(
+        "/agent/runs",
+        json={"provider": "fake", "task": "test task", "max_steps": 3},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert "run_id" in data
+    assert "status" in data
+
+
 def test_v1_chat_completion_accepts_workspace(client: TestClient) -> None:
     response = client.post(
         "/v1/chat/completions",

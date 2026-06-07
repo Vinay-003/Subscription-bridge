@@ -21,7 +21,7 @@ from subscription_bridge.api.models import (
     SessionInfo,
     SessionsResponse,
 )
-from subscription_bridge.core import AgentRuntime, Task
+from subscription_bridge.api.native.service import run_agent
 from subscription_bridge.memory.codebase_indexer import CodebaseIndexer
 from subscription_bridge.memory.retriever import Retriever
 from subscription_bridge.providers.base import ProviderRequest
@@ -87,47 +87,7 @@ async def ask(req: AskRequest, request: Request) -> AskResponse:
 @router.post("/run", response_model=RunResponse)
 async def run(req: RunRequest, request: Request) -> RunResponse:
     deps = _get_deps(request)
-    from subscription_bridge.providers.base import ProviderAdapter
-
-    provider_adapter: ProviderAdapter
-
-    if req.provider == "gemini":
-        try:
-            gemini_ap = await deps.get_gemini_adapter()
-            provider_adapter = gemini_ap
-        except Exception as e:
-            return RunResponse(success=False, error=f"Gemini unavailable: {e}")
-    else:
-        registry = deps.get_registry()
-        try:
-            provider_adapter = registry.get(req.provider)
-        except KeyError as e:
-            raise HTTPException(status_code=404, detail=str(e))
-
-    tool_registry = deps.get_tool_registry()
-    runtime = AgentRuntime(
-        provider=provider_adapter,
-        tool_registry=tool_registry,
-        max_steps=req.max_steps,
-    )
-
-    task = Task(
-        text=req.task,
-        workspace=req.workspace,
-        provider=req.provider,
-        max_steps=req.max_steps,
-    )
-
-    result = await runtime.run(task)
-
-    return RunResponse(
-        success=result.success,
-        answer=result.answer,
-        run_id=result.run_id,
-        steps=result.steps,
-        status=result.summary.get("status", ""),
-        error=result.error,
-    )
+    return await run_agent(req, deps)
 
 
 @router.get("/sessions", response_model=SessionsResponse)
