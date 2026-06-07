@@ -1,22 +1,24 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import importlib
 import json
-import os
-import re
-import tempfile
 import time
 import uuid
 from collections.abc import AsyncGenerator
 from typing import Any
 
-import httpx
 from fastapi import APIRouter, Request
 from starlette.responses import JSONResponse, StreamingResponse
 
 from subscription_bridge.api.dependencies import AppDependencies
+from subscription_bridge.api.openai.message_converter import (
+    cleanup_temp_files,
+    convert_messages,
+    extract_images_from_content,
+    extract_text,
+    save_image,
+)
 from subscription_bridge.api.openai.tool_parser import parse_tool_calls
 from subscription_bridge.api.openai_models import (
     ChatCompletionChunk,
@@ -74,16 +76,6 @@ MODEL_OUTPUT_LIMITS: dict[str, int] = {
     MODEL_CHATGPT_THINKING: 16384,
     MODEL_CHATGPT_PRO: 16384,
 }
-
-TOOL_CALL_SYSTEM_PROMPT = (
-    'You have access to tools. When you need to use a tool, '
-    'respond with a JSON object: {{"tool_calls": [{{"id": "call_1", '
-    '"type": "function", "function": {{"name": "tool_name", '
-    '"arguments": {{"arg1": "value1"}}}}}}]}}\n\n'
-    "Available tools:\n{tools_desc}\n\n"
-    "If you do not need a tool, respond normally with plain text."
-)
-
 
 def _get_deps(request: Request) -> AppDependencies:
     deps: AppDependencies = request.app.state.deps
@@ -420,125 +412,23 @@ def _convert_messages(
     tool_choice: str | dict[str, Any] | None = None,
     require_json_tools: bool = False,
 ) -> tuple[str, str]:
-    system_parts: list[str] = []
-    conversation: list[str] = []
-
-    for msg in messages:
-        role = msg.role
-        content = msg.content
-        text = _extract_text(content) if content else ""
-
-        if role == "system":
-            system_parts.append(text)
-        elif role == "user":
-            conversation.append(f"User: {text}")
-        elif role == "assistant":
-            if msg.tool_calls:
-                for tc in (msg.tool_calls or []):
-                    fn = tc.get("function", tc) if isinstance(tc, dict) else {}
-                    name = fn.get("name", "?") if isinstance(fn, dict) else "?"
-                    args = fn.get("arguments", "{}") if isinstance(fn, dict) else "{}"
-                    conversation.append(f"Assistant (tool call): {name}({args})")
-            if text:
-                conversation.append(f"Assistant: {text}")
-        elif role == "tool":
-            name = ""
-            if hasattr(msg, "tool_call_id") and msg.tool_call_id:
-                name = f" (call: {msg.tool_call_id})"
-            conversation.append(f"Tool result{name}: {text[:1000]}")
-
-    if tools and require_json_tools:
-        import json as _json
-        tools_desc_lines = []
-        for t in tools:
-            fname = t.get("function", t).get("name", "?") if isinstance(t, dict) else "?"
-            fdesc = t.get("function", t).get("description", "") if isinstance(t, dict) else ""
-            fparams = t.get("function", t).get("parameters", {}) if isinstance(t, dict) else {}
-            tools_desc_lines.append(f"  {fname}: {fdesc} | args: {_json.dumps(fparams)[:300]}")
-        tools_prompt = TOOL_CALL_SYSTEM_PROMPT.format(tools_desc="\n".join(tools_desc_lines))
-        system_parts.append(tools_prompt)
-
-    system_prompt = "\n".join(system_parts) if system_parts else ""
-
-    parts: list[str] = []
-    if conversation:
-        parts.append("Conversation:")
-        parts.extend(conversation)
-        parts.append("")
-
-    prompt = "\n".join(parts).strip()
-    return prompt, system_prompt
+    return convert_messages(messages, tools, tool_choice, require_json_tools)
 
 
 def _extract_text(content: str | list[dict[str, Any]]) -> str:
-    if isinstance(content, str):
-        return content
-    texts: list[str] = []
-    for part in content:
-        if isinstance(part, dict):
-            if part.get("type") == "text":
-                texts.append(str(part.get("text", "")))
-    return "\n".join(texts)
+    return extract_text(content)
 
 
 def _extract_images_from_content(content: str | list[dict[str, Any]]) -> list[str]:
-    if isinstance(content, str):
-        return []
-    paths: list[str] = []
-    for part in content:
-        if isinstance(part, dict) and part.get("type") == "image_url":
-            url = part.get("image_url", {})
-            if isinstance(url, dict):
-                url = url.get("url", "")
-            if not url:
-                continue
-            path = _save_image(url)
-            if path:
-                paths.append(path)
-    return paths
+    return extract_images_from_content(content)
 
 
 def _save_image(url: str) -> str | None:
-    try:
-        if url.startswith("data:"):
-            match = re.match(r"data:image/(\w+);base64,(.+)", url)
-            if not match:
-                return None
-            ext = match.group(1)
-            data = base64.b64decode(match.group(2))
-            with tempfile.NamedTemporaryFile(
-                mode="wb", suffix=f".{ext}", delete=False,
-                prefix="bridge_img_",
-            ) as f:
-                f.write(data)
-                return f.name
-        else:
-            response = httpx.get(url, timeout=30, follow_redirects=True)
-            response.raise_for_status()
-            content_type = response.headers.get("content-type", "")
-            ext = "png"
-            if "jpeg" in content_type or "jpg" in content_type:
-                ext = "jpg"
-            elif "gif" in content_type:
-                ext = "gif"
-            elif "webp" in content_type:
-                ext = "webp"
-            with tempfile.NamedTemporaryFile(
-                mode="wb", suffix=f".{ext}", delete=False,
-                prefix="bridge_img_",
-            ) as f:
-                f.write(response.content)
-                return f.name
-    except Exception:
-        return None
+    return save_image(url)
 
 
 def _cleanup_temp_files(paths: list[str]) -> None:
-    for p in paths:
-        try:
-            os.unlink(p)
-        except Exception:
-            pass
+    cleanup_temp_files(paths)
 
 
 def _parse_tool_calls(text: str) -> list[ToolCall]:
