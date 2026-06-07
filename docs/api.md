@@ -10,6 +10,11 @@ bridge server --host 127.0.0.1 --port 8787
 
 Interactive API docs are available at http://127.0.0.1:8787/docs.
 
+SubscriptionBridge has two execution modes:
+
+- `/v1/*` is an OpenAI-compatible model gateway. It forwards prompts to browser-backed models and never executes local tools.
+- `/agent/runs` and legacy `/run` execute SubscriptionBridge's native local agent loop, including local tools such as file reads, writes, grep, bash, patch, and codebase search.
+
 ---
 
 ## Endpoints
@@ -94,7 +99,7 @@ curl -X POST http://127.0.0.1:8787/ask \
 
 ### POST /run
 
-Run the full agent loop on a task.
+Run the full native agent loop on a task. This endpoint is retained for compatibility and delegates to the same service as `/agent/runs`.
 
 **Request:**
 ```json
@@ -121,6 +126,41 @@ Run the full agent loop on a task.
 **Example:**
 ```bash
 curl -X POST http://127.0.0.1:8787/run \
+  -H "Content-Type: application/json" \
+  -d '{"provider":"fake","task":"test task","workspace":".","max_steps":5}'
+```
+
+---
+
+### POST /agent/runs
+
+Run the native SubscriptionBridge agent loop on a task. This endpoint executes local tools through `ToolExecutor`, so provide the intended workspace explicitly.
+
+**Request:**
+```json
+{
+  "provider": "fake",
+  "task": "Read pyproject.toml and summarize dependencies",
+  "workspace": ".",
+  "max_steps": 10
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "answer": "Summary of dependencies...",
+  "run_id": "run-abc123def456",
+  "steps": 2,
+  "status": "completed",
+  "error": null
+}
+```
+
+**Example:**
+```bash
+curl -X POST http://127.0.0.1:8787/agent/runs \
   -H "Content-Type: application/json" \
   -d '{"provider":"fake","task":"test task","workspace":".","max_steps":5}'
 ```
@@ -253,7 +293,8 @@ Get codebase index statistics.
 ## OpenAI-Compatible Endpoints
 
 SubscriptionBridge exposes OpenAI-compatible endpoints for integration with
-[OpenCode](https://opencode.ai) and other OpenAI-compatible clients.
+[OpenCode](https://opencode.ai) and other OpenAI-compatible clients. These
+endpoints are a model gateway, not the native agent runtime.
 
 ### GET /v1/models
 
@@ -287,7 +328,9 @@ curl http://127.0.0.1:8787/v1/models
 
 ### POST /v1/chat/completions
 
-Send a chat completion request in OpenAI format.
+Send a chat completion request in OpenAI format. This endpoint forwards the
+request to the selected provider and returns model output. It does not execute
+local tools, even when `tools` are present.
 
 **Request:**
 ```json
@@ -361,5 +404,6 @@ See [opencode.md](opencode.md) for OpenCode integration setup.
 
 - Token counts are approximate (character count / 4)
 - Streaming is simulated by chunking the final response text
-- Tool call execution is handled by OpenCode, not SubscriptionBridge
+- Tool call execution for `/v1/chat/completions` is handled by the client, not SubscriptionBridge
+- Use `/agent/runs` or `/run` when you want SubscriptionBridge to execute local tools
 - Image inputs in content arrays are accepted but ignored

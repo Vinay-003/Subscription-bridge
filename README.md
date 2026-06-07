@@ -11,7 +11,7 @@
 
 You already pay for Gemini, ChatGPT, or Claude through your browser. But you cannot use them as programmable agents. They are locked inside web UIs. Official APIs cost extra, have different models, have separate rate limits, and often require billing setup.
 
-**SubscriptionBridge solves this** by wrapping your existing browser-based subscriptions behind a clean agent interface with tool execution, codebase memory, and a local API.
+**SubscriptionBridge solves this** by wrapping your existing browser-based subscriptions behind a local API. It can act as either an OpenAI-compatible model gateway for external agents, or as its own native local coding agent.
 
 ## Core Value Proposition
 
@@ -22,7 +22,8 @@ You already pay for Gemini, ChatGPT, or Claude through your browser. But you can
 - Full agent loop with tools (file read/write, grep, bash, git diff, patch)
 - Codebase memory indexing with semantic, keyword, and symbol search
 - File prompting (upload files to Gemini alongside prompts)
-- Local REST API for integration with other tools
+- OpenAI-compatible `/v1` model gateway for OpenCode and other clients
+- Native `/agent/runs` and `/run` agent APIs with local tool execution
 - Modular provider architecture — add new providers without changing the runtime
 
 ---
@@ -57,10 +58,8 @@ flowchart TB
     CP --> BR
     BR --> GW
 
-    subgraph future ["Future (Phase 9+)"]
-        OC["OpenCode /<br/>OpenAI-compatible API"]
-        OC --> PR
-    end
+    OC["OpenCode /<br/>OpenAI-compatible API"]
+    OC --> PR
 ```
 
 ### Six Layers
@@ -167,9 +166,11 @@ curl http://127.0.0.1:8787/v1/models
 
 ---
 
-## OpenAI-CompatEndpoints
+## OpenAI-Compatible Endpoints
 
-SubscriptionBridge exposes an OpenAI-compatible API for integration with [OpenCode](https://opencode.ai) and other OpenAI-compatible clients.
+SubscriptionBridge exposes an OpenAI-compatible `/v1` API for integration with [OpenCode](https://opencode.ai) and other OpenAI-compatible clients.
+
+This API is a model gateway only. `/v1/chat/completions` forwards prompts to the selected browser model and may return OpenAI-compatible `tool_calls`, but it does not execute local tools. Clients such as OpenCode own project context, file edits, shell commands, and tool result submission.
 
 ```bash
 # List models
@@ -229,6 +230,23 @@ curl -X POST http://127.0.0.1:8787/ask \
 Upload uses CDP DOM injection to bypass the native OS file dialog — works with Chrome in CDP mode.
 
 See [docs/opencode.md](docs/opencode.md) for OpenCode configuration.
+
+## Native Agent API
+
+Use `/agent/runs` when you want SubscriptionBridge itself to run the local agent loop and execute tools. The legacy `/run` endpoint remains available and delegates to the same native agent service.
+
+```bash
+curl -X POST http://127.0.0.1:8787/agent/runs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "provider": "fake",
+    "task": "Read README.md and summarize it",
+    "workspace": ".",
+    "max_steps": 5
+  }'
+```
+
+Use `/v1/chat/completions` for external agents. Use `/agent/runs` or `/run` for SubscriptionBridge-managed local tool execution.
 
 ## CLI Commands
 
