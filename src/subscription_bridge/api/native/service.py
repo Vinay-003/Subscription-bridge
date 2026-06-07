@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from fastapi import HTTPException
 
+from subscription_bridge.agents import AgentRuntime, Task
 from subscription_bridge.api.dependencies import AppDependencies
 from subscription_bridge.api.models import RunRequest, RunResponse
-from subscription_bridge.core import AgentRuntime, Task
 from subscription_bridge.providers.base import ProviderAdapter
 
 
