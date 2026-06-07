@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import importlib
 import json
 import time
 import uuid
@@ -18,6 +17,19 @@ from subscription_bridge.api.openai.message_converter import (
     extract_images_from_content,
     extract_text,
     save_image,
+)
+from subscription_bridge.api.openai.model_catalog import (
+    CHATGPT_MODELS,
+    GEMINI_MODELS,
+    MODEL_CONTEXT_LIMITS,
+    MODEL_FAKE,
+    build_models,
+    chatgpt_model_variant,
+    gemini_model_variant,
+    is_chatgpt_model,
+    is_gemini_model,
+    resolve_model_alias,
+    strip_provider_prefix,
 )
 from subscription_bridge.api.openai.tool_parser import parse_tool_calls
 from subscription_bridge.api.openai_models import (
@@ -38,59 +50,13 @@ from subscription_bridge.workspace import resolve_workspace
 
 router = APIRouter()
 
-MODEL_FAKE = "subscription-bridge-fake"
-MODEL_GEMINI_FAST = "subscription-bridge-gemini-fast"
-MODEL_GEMINI_THINKING = "subscription-bridge-gemini-thinking"
-MODEL_GEMINI_PRO = "subscription-bridge-gemini-pro"
-MODEL_CHATGPT = "subscription-bridge-chatgpt"
-MODEL_CHATGPT_THINKING = "subscription-bridge-chatgpt-thinking"
-MODEL_CHATGPT_PRO = "subscription-bridge-chatgpt-pro"
-
-MODEL_ALIASES: dict[str, str] = {
-    "subscription-bridge-gemini-flash": MODEL_GEMINI_FAST,
-    "subscription-bridge-gemini-flash-lite": MODEL_GEMINI_FAST,
-    "subscription-bridge-gemini-3-flash": MODEL_GEMINI_FAST,
-    "gemini-2.0-flash": MODEL_GEMINI_FAST,
-    "gemini-2.5-pro": MODEL_GEMINI_PRO,
-}
-
-GEMINI_MODELS = {MODEL_GEMINI_FAST, MODEL_GEMINI_THINKING, MODEL_GEMINI_PRO}
-CHATGPT_MODELS = {MODEL_CHATGPT, MODEL_CHATGPT_THINKING, MODEL_CHATGPT_PRO}
-
-MODEL_CONTEXT_LIMITS: dict[str, int] = {
-    MODEL_FAKE: 32000,
-    MODEL_GEMINI_FAST: 1_000_000,
-    MODEL_GEMINI_THINKING: 192_000,
-    MODEL_GEMINI_PRO: 1_000_000,
-    MODEL_CHATGPT: 128_000,
-    MODEL_CHATGPT_THINKING: 128_000,
-    MODEL_CHATGPT_PRO: 128_000,
-}
-
-MODEL_OUTPUT_LIMITS: dict[str, int] = {
-    MODEL_FAKE: 8192,
-    MODEL_GEMINI_FAST: 8192,
-    MODEL_GEMINI_THINKING: 65536,
-    MODEL_GEMINI_PRO: 65536,
-    MODEL_CHATGPT: 16384,
-    MODEL_CHATGPT_THINKING: 16384,
-    MODEL_CHATGPT_PRO: 16384,
-}
-
 def _get_deps(request: Request) -> AppDependencies:
     deps: AppDependencies = request.app.state.deps
     return deps
 
 
 def _build_models() -> list[OpenAIModel]:
-    models = [OpenAIModel(id=MODEL_FAKE, owned_by="subscription-bridge")]
-    if importlib.util.find_spec("subscription_bridge.providers.gemini"):
-        for mid in [MODEL_GEMINI_FAST, MODEL_GEMINI_THINKING, MODEL_GEMINI_PRO]:
-            models.append(OpenAIModel(id=mid, owned_by="subscription-bridge"))
-    if importlib.util.find_spec("subscription_bridge.providers.chatgpt"):
-        for mid in [MODEL_CHATGPT, MODEL_CHATGPT_THINKING, MODEL_CHATGPT_PRO]:
-            models.append(OpenAIModel(id=mid, owned_by="subscription-bridge"))
-    return models
+    return build_models()
 
 
 def _error_json(
@@ -110,16 +76,11 @@ def _estimate_tokens(text: str) -> int:
 
 
 def _strip_provider_prefix(model_id: str) -> str:
-    if "/" in model_id:
-        return model_id.split("/", 1)[1]
-    return model_id
+    return strip_provider_prefix(model_id)
 
 
 def _resolve_model_alias(model_id: str) -> str:
-    stripped = _strip_provider_prefix(model_id)
-    if stripped in MODEL_ALIASES:
-        return MODEL_ALIASES[stripped]
-    return model_id
+    return resolve_model_alias(model_id)
 
 
 def _check_context_limit(req: ChatCompletionRequest) -> JSONResponse | None:
@@ -152,21 +113,11 @@ def _check_context_limit(req: ChatCompletionRequest) -> JSONResponse | None:
 
 
 def _gemini_model_variant(model_id: str) -> str:
-    mapping = {
-        MODEL_GEMINI_FAST: "Gemini 3 Flash",
-        MODEL_GEMINI_THINKING: "Gemini 3 Deep Think",
-        MODEL_GEMINI_PRO: "Gemini 3.1 Pro",
-    }
-    return mapping.get(_strip_provider_prefix(model_id), "Gemini 3 Flash")
+    return gemini_model_variant(model_id)
 
 
 def _chatgpt_model_variant(model_id: str) -> str:
-    mapping = {
-        MODEL_CHATGPT: "Instant",
-        MODEL_CHATGPT_THINKING: "Thinking",
-        MODEL_CHATGPT_PRO: "Pro",
-    }
-    return mapping.get(_strip_provider_prefix(model_id), "Instant")
+    return chatgpt_model_variant(model_id)
 
 
 def _with_model_hint(prompt: str, variant: str) -> str:
@@ -325,10 +276,10 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
     workspace_resolution = resolve_workspace(req, request)
     log.info("workspace_resolved", workspace=workspace_resolution.path, source=workspace_resolution.source)
 
-    if _strip_provider_prefix(req.model) in GEMINI_MODELS:
+    if is_gemini_model(req.model):
         variant = _gemini_model_variant(req.model)
         prompt = _with_model_hint(prompt, variant)
-    elif _strip_provider_prefix(req.model) in CHATGPT_MODELS:
+    elif is_chatgpt_model(req.model):
         variant = _chatgpt_model_variant(req.model)
         prompt = _with_model_hint(prompt, variant)
 
@@ -346,10 +297,10 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
         timeout_seconds=max(req.max_tokens // 100, 30),
         metadata={
             "gemini_model_variant": _gemini_model_variant(req.model)
-            if _strip_provider_prefix(req.model) in GEMINI_MODELS
+            if is_gemini_model(req.model)
             else None,
             "chatgpt_model_variant": _chatgpt_model_variant(req.model)
-            if _strip_provider_prefix(req.model) in CHATGPT_MODELS
+            if is_chatgpt_model(req.model)
             else None,
         },
     )
