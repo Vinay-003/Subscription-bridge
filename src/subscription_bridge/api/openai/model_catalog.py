@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import importlib
+import importlib.util as importlib_util
 from typing import Any
 
 from subscription_bridge.api.openai_models import OpenAIModel
@@ -158,8 +158,8 @@ def _configured_variant(model_id: str) -> str | None:
 
 def _default_model_ids() -> list[str]:
     models = [MODEL_FAKE]
-    if importlib.util.find_spec("subscription_bridge.providers.gemini"):
+    if importlib_util.find_spec("subscription_bridge.providers.gemini"):
         models.extend([MODEL_GEMINI_FAST, MODEL_GEMINI_THINKING, MODEL_GEMINI_PRO])
-    if importlib.util.find_spec("subscription_bridge.providers.chatgpt"):
+    if importlib_util.find_spec("subscription_bridge.providers.chatgpt"):
         models.extend([MODEL_CHATGPT, MODEL_CHATGPT_THINKING, MODEL_CHATGPT_PRO])
     return models

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import cast
+
 from fastapi import HTTPException
 
 from subscription_bridge.agents import AgentRuntime, Task
@@ -45,7 +47,7 @@ async def _resolve_provider(provider: str, deps: AppDependencies) -> ProviderAda
 
     if provider == "chatgpt":
         try:
-            return await deps.get_chatgpt_adapter()
+            return cast(ProviderAdapter, await deps.get_chatgpt_adapter())
         except Exception as e:
             raise HTTPException(status_code=503, detail=f"ChatGPT unavailable: {e}") from e
 

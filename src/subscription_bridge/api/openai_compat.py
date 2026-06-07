@@ -125,9 +125,9 @@ def _with_model_hint(prompt: str, variant: str) -> str:
 
 def _resolve_agent_answer(result: Any) -> str:
     if result.answer:
-        return result.answer
+        return str(result.answer)
     if result.needs_clarification and result.question:
-        return result.question
+        return str(result.question)
     if result.error:
         return f"Error: {result.error}"
     return "No answer generated"

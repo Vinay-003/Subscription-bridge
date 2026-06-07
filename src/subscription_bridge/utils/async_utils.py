@@ -12,7 +12,7 @@ def run_async(coro: Awaitable[T], timeout: float | None = None) -> T:
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        return asyncio.run(coro)
+        return cast(T, asyncio.run(cast(Any, coro)))
 
     result: list[T] = []
     exc: list[BaseException] = []

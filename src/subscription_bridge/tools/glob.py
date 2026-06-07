@@ -38,8 +38,7 @@ class GlobTool(Tool):
         if not resolved.exists():
             return ToolResult(name=self.name, success=False, error=f"Directory not found: {search_path}")
 
-        matches = list(resolved.rglob(pattern))
-        matches = [str(m.relative_to(workspace_root)) for m in matches if m.is_file()]
+        matches: list[str] = [str(m.relative_to(workspace_root)) for m in resolved.rglob(pattern) if m.is_file()]
         matches.sort()
 
         return ToolResult(

@@ -5,9 +5,15 @@ from subscription_bridge.tools.base import Tool, ToolResult
 
 class TodoWriteTool(Tool):
     name = "todo_write"
-    description = "Create or update todos. Use this to track task progress. Opencode will display these todos in the UI."
+    description = (
+        "Create or update todos. Use this to track task progress. "
+        "Opencode will display these todos in the UI."
+    )
     input_schema = {
-        "todos": "array of objects with content (string), status (pending|in_progress|completed|cancelled), and optional id (string)"
+        "todos": (
+            "array of objects with content (string), status "
+            "(pending|in_progress|completed|cancelled), and optional id (string)"
+        )
     }
 
     async def run(self, arguments: dict) -> ToolResult:
