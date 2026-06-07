@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import time
 import uuid
@@ -31,14 +30,12 @@ from subscription_bridge.api.openai.model_catalog import (
     resolve_model_alias,
     strip_provider_prefix,
 )
+from subscription_bridge.api.openai.streaming import error_stream, stream_agent_answer, stream_response
 from subscription_bridge.api.openai.tool_parser import parse_tool_calls
 from subscription_bridge.api.openai_models import (
-    ChatCompletionChunk,
     ChatCompletionRequest,
     ChatCompletionResponse,
     Choice,
-    ChoiceDelta,
-    DeltaMessage,
     ModelList,
     OpenAIModel,
     ResponseMessage,
@@ -391,67 +388,15 @@ async def _stream_response(
     request: ProviderRequest,
     model: str,
 ) -> AsyncGenerator[str, None]:
-    completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
-    now = int(time.time())
-
-    role_chunk = ChatCompletionChunk(
-        id=completion_id, created=now, model=model,
-        choices=[ChoiceDelta(index=0, delta=DeltaMessage(role="assistant"), finish_reason=None)],
-    )
-    yield f"data: {role_chunk.model_dump_json()}\n\n"
-
-    response = await adapter.send_prompt(request)
-
-    if response.success and response.text:
-        text = response.text
-        chunk_size = max(len(text) // 10, 5)
-        for i in range(0, len(text), chunk_size):
-            chunk_text = text[i : i + chunk_size]
-            content_chunk = ChatCompletionChunk(
-                id=completion_id, created=now, model=model,
-                choices=[ChoiceDelta(index=0, delta=DeltaMessage(content=chunk_text), finish_reason=None)],
-            )
-            yield f"data: {content_chunk.model_dump_json()}\n\n"
-            await asyncio.sleep(0.01)
-
-    stop_chunk = ChatCompletionChunk(
-        id=completion_id, created=now, model=model,
-        choices=[ChoiceDelta(index=0, delta=DeltaMessage(), finish_reason="stop")],
-    )
-    yield f"data: {stop_chunk.model_dump_json()}\n\n"
-    yield "data: [DONE]\n\n"
+    async for chunk in stream_response(adapter, request, model):
+        yield chunk
 
 
 async def _stream_agent_answer(answer: str, model: str) -> AsyncGenerator[str, None]:
-    completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
-    now = int(time.time())
-    role_chunk = ChatCompletionChunk(
-        id=completion_id, created=now, model=model,
-        choices=[ChoiceDelta(index=0, delta=DeltaMessage(role="assistant"), finish_reason=None)],
-    )
-    yield f"data: {role_chunk.model_dump_json()}\n\n"
-    if answer:
-        chunk_size = max(len(answer) // 10, 5)
-        for i in range(0, len(answer), chunk_size):
-            chunk_text = answer[i:i + chunk_size]
-            content_chunk = ChatCompletionChunk(
-                id=completion_id, created=now, model=model,
-                choices=[ChoiceDelta(index=0, delta=DeltaMessage(content=chunk_text), finish_reason=None)],
-            )
-            yield f"data: {content_chunk.model_dump_json()}\n\n"
-            await asyncio.sleep(0.01)
-    stop_chunk = ChatCompletionChunk(
-        id=completion_id, created=now, model=model,
-        choices=[ChoiceDelta(index=0, delta=DeltaMessage(), finish_reason="stop")],
-    )
-    yield f"data: {stop_chunk.model_dump_json()}\n\n"
-    yield "data: [DONE]\n\n"
+    async for chunk in stream_agent_answer(answer, model):
+        yield chunk
 
 
 async def _error_stream(message: str) -> AsyncGenerator[str, None]:
-    error_chunk = ChatCompletionChunk(
-        id="error", created=int(time.time()), model="unknown",
-        choices=[ChoiceDelta(index=0, delta=DeltaMessage(content=f"Error: {message}"), finish_reason="stop")],
-    )
-    yield f"data: {error_chunk.model_dump_json()}\n\n"
-    yield "data: [DONE]\n\n"
+    async for chunk in error_stream(message):
+        yield chunk
