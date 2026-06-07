@@ -25,7 +25,23 @@ file_write:
     - "**/token*"
   max_size_bytes: 1_048_576
 
+file_edit:
+  enabled: true
+  allow_paths: ["."]
+  deny_paths:
+    - ".env"
+    - ".env.*"
+    - "**/credentials*"
+    - "**/secret*"
+    - "**/token*"
+
 grep:
+  enabled: true
+  allow_paths: ["."]
+  deny_paths: []
+  timeout_seconds: 30
+
+glob:
   enabled: true
   allow_paths: ["."]
   deny_paths: []
@@ -72,3 +88,6 @@ patch:
 codebase_search:
   enabled: true
   timeout_seconds: 30
+
+todo_write:
+  enabled: true
