@@ -58,6 +58,34 @@ async def test_acquire_reuse_idle(pool: SessionPool) -> None:
 
 
 @pytest.mark.asyncio
+async def test_acquire_closes_stale_idle_session() -> None:
+    pool = SessionPool(max_sessions=3, session_ttl_seconds=0.01)
+    session = await pool.acquire("test", "run-001", _page_factory)
+    page = session.page
+    await pool.release(session.session_id)
+    session.last_used_at -= 60
+
+    replacement = await pool.acquire("test", "run-002", _page_factory)
+
+    assert page._closed is True
+    assert replacement.session_id != session.session_id
+    assert pool.get_session(session.session_id) is None
+
+
+@pytest.mark.asyncio
+async def test_acquire_closes_crashed_session(pool: SessionPool) -> None:
+    session = await pool.acquire("test", "run-001", _page_factory)
+    page = session.page
+    session.mark_crashed()
+
+    replacement = await pool.acquire("test", "run-002", _page_factory)
+
+    assert page._closed is True
+    assert replacement.session_id != session.session_id
+    assert pool.get_session(session.session_id) is None
+
+
+@pytest.mark.asyncio
 async def test_acquire_max_sessions(pool: SessionPool) -> None:
     await pool.acquire("test", "run-001", _page_factory)
     await pool.acquire("test", "run-002", _page_factory)

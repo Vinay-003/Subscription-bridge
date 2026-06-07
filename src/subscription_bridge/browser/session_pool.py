@@ -21,7 +21,7 @@ class SessionPool:
         self._sessions: dict[str, TabSession] = {}
 
     async def acquire(self, provider_name: str, run_id: str, page_factory: Any) -> TabSession:
-        self._evict_stale()
+        await self._evict_stale()
 
         existing = self._find_by_run_id(run_id)
         if existing is not None:
@@ -95,7 +95,6 @@ class SessionPool:
         return await session.ensure_alive()
 
     def list_sessions(self) -> list[dict[str, Any]]:
-        self._evict_stale()
         result: list[dict[str, Any]] = []
         for session in self._sessions.values():
             result.append({
@@ -145,7 +144,7 @@ class SessionPool:
                 return session
         return None
 
-    def _evict_stale(self) -> None:
+    async def _evict_stale(self) -> None:
         now = time.monotonic()
         stale_ids = [
             sid
@@ -155,4 +154,6 @@ class SessionPool:
             or (s.state == SessionState.IDLE and now - s.last_used_at > self._session_ttl)
         ]
         for sid in stale_ids:
-            self._sessions.pop(sid, None)
+            session = self._sessions.pop(sid, None)
+            if session is not None:
+                await session.close()
