@@ -20,10 +20,10 @@ from subscription_bridge.api.openai.message_converter import (
 from subscription_bridge.api.openai.model_catalog import (
     CHATGPT_MODELS,
     GEMINI_MODELS,
-    MODEL_CONTEXT_LIMITS,
     MODEL_FAKE,
     build_models,
     chatgpt_model_variant,
+    context_limit_for_model,
     gemini_model_variant,
     is_chatgpt_model,
     is_gemini_model,
@@ -81,10 +81,9 @@ def _resolve_model_alias(model_id: str) -> str:
 
 
 def _check_context_limit(req: ChatCompletionRequest) -> JSONResponse | None:
-    model = _strip_provider_prefix(req.model)
-    if model not in MODEL_CONTEXT_LIMITS:
+    context_limit = context_limit_for_model(req.model)
+    if context_limit is None:
         return None
-    context_limit = MODEL_CONTEXT_LIMITS[model]
 
     total_text = ""
     for msg in req.messages:

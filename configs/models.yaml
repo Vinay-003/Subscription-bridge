@@ -1,0 +1,76 @@
+models:
+  subscription-bridge-fake:
+    provider: fake
+    label: SubscriptionBridge Fake
+    context_limit: 32000
+    output_limit: 8192
+    capabilities:
+      input: [text]
+      output: [text]
+
+  subscription-bridge-gemini-fast:
+    provider: gemini
+    provider_variant: Gemini 3 Flash
+    label: Gemini Browser Fast
+    context_limit: 1000000
+    output_limit: 8192
+    capabilities:
+      input: [text, image]
+      output: [text]
+
+  subscription-bridge-gemini-thinking:
+    provider: gemini
+    provider_variant: Gemini 3 Deep Think
+    label: Gemini Browser Thinking
+    context_limit: 192000
+    output_limit: 65536
+    capabilities:
+      input: [text, image]
+      output: [text]
+
+  subscription-bridge-gemini-pro:
+    provider: gemini
+    provider_variant: Gemini 3.1 Pro
+    label: Gemini Browser Pro
+    context_limit: 1000000
+    output_limit: 65536
+    capabilities:
+      input: [text, image]
+      output: [text]
+
+  subscription-bridge-chatgpt:
+    provider: chatgpt
+    provider_variant: Instant
+    label: ChatGPT Browser
+    context_limit: 128000
+    output_limit: 16384
+    capabilities:
+      input: [text, image]
+      output: [text]
+
+  subscription-bridge-chatgpt-thinking:
+    provider: chatgpt
+    provider_variant: Thinking
+    label: ChatGPT Browser Thinking
+    context_limit: 128000
+    output_limit: 16384
+    capabilities:
+      input: [text, image]
+      output: [text]
+
+  subscription-bridge-chatgpt-pro:
+    provider: chatgpt
+    provider_variant: Pro
+    label: ChatGPT Browser Pro
+    context_limit: 128000
+    output_limit: 16384
+    capabilities:
+      input: [text, image]
+      output: [text]
+
+aliases:
+  subscription-bridge-gemini-flash: subscription-bridge-gemini-fast
+  subscription-bridge-gemini-flash-lite: subscription-bridge-gemini-fast
+  subscription-bridge-gemini-3-flash: subscription-bridge-gemini-fast
+  gemini-2.0-flash: subscription-bridge-gemini-fast
+  gemini-2.5-pro: subscription-bridge-gemini-pro

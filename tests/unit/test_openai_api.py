@@ -21,6 +21,13 @@ def test_v1_models(client: TestClient) -> None:
     assert "subscription-bridge-fake" in model_ids
 
 
+def test_model_catalog_loads_configured_aliases() -> None:
+    from subscription_bridge.api.openai.model_catalog import context_limit_for_model, resolve_model_alias
+
+    assert resolve_model_alias("gemini-2.0-flash") == "subscription-bridge-gemini-fast"
+    assert context_limit_for_model("subscription-bridge-gemini-thinking") == 192000
+
+
 # ── Tool call parsing tests ──────────────────────────────────────────────────
 
 

@@ -101,6 +101,15 @@ def load_providers_config() -> dict[str, Any]:
     return data
 
 
+def load_models_config() -> dict[str, Any]:
+    path = _find_config_path("models.yaml")
+    if not path:
+        return {"models": {}, "aliases": {}}
+
+    data = _load_yaml(path)
+    return data
+
+
 def load_selector_config(provider_name: str) -> dict[str, Any]:
     path = _find_config_path(f"selectors/{provider_name}.yaml")
     if not path:
