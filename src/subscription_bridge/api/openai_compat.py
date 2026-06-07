@@ -18,17 +18,17 @@ from subscription_bridge.api.openai.message_converter import (
     save_image,
 )
 from subscription_bridge.api.openai.model_catalog import (
-    CHATGPT_MODELS,
-    GEMINI_MODELS,
-    MODEL_FAKE,
     build_models,
     chatgpt_model_variant,
     context_limit_for_model,
     gemini_model_variant,
-    is_chatgpt_model,
-    is_gemini_model,
     resolve_model_alias,
     strip_provider_prefix,
+)
+from subscription_bridge.api.openai.model_router import (
+    prompt_with_model_hint,
+    provider_metadata,
+    resolve_adapter,
 )
 from subscription_bridge.api.openai.streaming import error_stream, stream_agent_answer, stream_response
 from subscription_bridge.api.openai.tool_parser import parse_tool_calls
@@ -176,20 +176,7 @@ def _title_from_messages(messages: list[Any]) -> str:
 
 
 async def _resolve_adapter(model_id: str, deps: AppDependencies) -> Any | None:
-    model = _strip_provider_prefix(model_id)
-    if model == MODEL_FAKE:
-        return deps.get_registry().get("fake")
-    if model in GEMINI_MODELS:
-        try:
-            return await deps.get_gemini_adapter()
-        except Exception:
-            return None
-    if model in CHATGPT_MODELS:
-        try:
-            return await deps.get_chatgpt_adapter()
-        except Exception:
-            return None
-    return None
+    return await resolve_adapter(model_id, deps)
 
 
 @router.get("/v1/models")
@@ -272,12 +259,7 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
     workspace_resolution = resolve_workspace(req, request)
     log.info("workspace_resolved", workspace=workspace_resolution.path, source=workspace_resolution.source)
 
-    if is_gemini_model(req.model):
-        variant = _gemini_model_variant(req.model)
-        prompt = _with_model_hint(prompt, variant)
-    elif is_chatgpt_model(req.model):
-        variant = _chatgpt_model_variant(req.model)
-        prompt = _with_model_hint(prompt, variant)
+    prompt = prompt_with_model_hint(prompt, req.model)
 
     attachments: list[str] = []
     for msg in req.messages:
@@ -291,14 +273,7 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
         attachments=attachments or None,
         require_json=has_tools,
         timeout_seconds=max(req.max_tokens // 100, 30),
-        metadata={
-            "gemini_model_variant": _gemini_model_variant(req.model)
-            if is_gemini_model(req.model)
-            else None,
-            "chatgpt_model_variant": _chatgpt_model_variant(req.model)
-            if is_chatgpt_model(req.model)
-            else None,
-        },
+        metadata=provider_metadata(req.model),
     )
 
     if req.stream and provider_adapter is not None and provider_adapter.name == "fake":

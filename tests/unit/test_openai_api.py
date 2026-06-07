@@ -28,6 +28,31 @@ def test_model_catalog_loads_configured_aliases() -> None:
     assert context_limit_for_model("subscription-bridge-gemini-thinking") == 192000
 
 
+@pytest.mark.asyncio
+async def test_model_router_resolves_provider_details() -> None:
+    from subscription_bridge.api.dependencies import AppDependencies
+    from subscription_bridge.api.openai.model_router import (
+        prompt_with_model_hint,
+        provider_metadata,
+        resolve_adapter,
+        route_for_model,
+    )
+
+    route = route_for_model("subscription-bridge-gemini-thinking")
+
+    assert route is not None
+    assert route.provider == "gemini"
+    assert route.variant == "Gemini 3 Deep Think"
+    assert provider_metadata("subscription-bridge-gemini-thinking") == {
+        "gemini_model_variant": "Gemini 3 Deep Think",
+        "chatgpt_model_variant": None,
+    }
+    assert prompt_with_model_hint("hello", "subscription-bridge-gemini-thinking").startswith(
+        "[Model: Gemini 3 Deep Think]"
+    )
+    assert (await resolve_adapter("subscription-bridge-fake", AppDependencies())).name == "fake"
+
+
 # ── Tool call parsing tests ──────────────────────────────────────────────────
 
 
