@@ -34,6 +34,16 @@ def test_parse_tool_calls_xml_tags() -> None:
     assert calls[0].function.arguments == '{"path": "foo.py"}'
 
 
+def test_parse_tool_calls_extracted_module() -> None:
+    from subscription_bridge.api.openai.tool_parser import parse_tool_calls
+
+    text = '{"tool_calls":[{"function":{"name":"bash","arguments":{"command":"pwd"}}}]}'
+    calls = parse_tool_calls(text)
+    assert len(calls) == 1
+    assert calls[0].function.name == "bash"
+    assert calls[0].function.arguments == '{"command": "pwd"}'
+
+
 def test_parse_tool_calls_multiple_xml() -> None:
     from subscription_bridge.api.openai_compat import _parse_tool_calls
 

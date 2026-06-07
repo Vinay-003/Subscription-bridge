@@ -17,6 +17,7 @@ from fastapi import APIRouter, Request
 from starlette.responses import JSONResponse, StreamingResponse
 
 from subscription_bridge.api.dependencies import AppDependencies
+from subscription_bridge.api.openai.tool_parser import parse_tool_calls
 from subscription_bridge.api.openai_models import (
     ChatCompletionChunk,
     ChatCompletionRequest,
@@ -24,7 +25,6 @@ from subscription_bridge.api.openai_models import (
     Choice,
     ChoiceDelta,
     DeltaMessage,
-    FunctionCall,
     ModelList,
     OpenAIModel,
     ResponseMessage,
@@ -542,105 +542,7 @@ def _cleanup_temp_files(paths: list[str]) -> None:
 
 
 def _parse_tool_calls(text: str) -> list[ToolCall]:
-    import json
-    text = text.strip()
-    if not text:
-        return []
-
-    def _to_tool_call(data: dict) -> ToolCall:
-        fn = data.get("function", {})
-        if isinstance(fn, dict):
-            args = fn.get("arguments", "{}")
-            if not isinstance(args, str):
-                args = json.dumps(args)
-            return ToolCall(
-                id=data.get("id", ""),
-                type=data.get("type", "function"),
-                function=FunctionCall(name=fn.get("name", ""), arguments=args),
-            )
-        return ToolCall(
-            id=data.get("id", ""),
-            type="function",
-            function=FunctionCall(
-                name=data.get("name", ""),
-                arguments=json.dumps(data.get("arguments", {})),
-            ),
-        )
-
-    def _ensure_function_wrapper(data: dict) -> dict:
-        if "function" not in data and "name" in data:
-            return {
-                "id": data.get("id", ""),
-                "type": "function",
-                "function": {
-                    "name": data["name"],
-                    "arguments": json.dumps(data.get("arguments", {})),
-                },
-            }
-        return data
-
-    # 1. XML tags: <tool_call>{...}</tool_call>
-    import re
-    xml_calls = re.findall(r'<tool_call>(.*?)</tool_call>', text, re.DOTALL)
-    if xml_calls:
-        results = []
-        for raw in xml_calls:
-            try:
-                data = json.loads(raw.strip())
-                if isinstance(data, dict):
-                    data = _ensure_function_wrapper(data)
-                    results.append(_to_tool_call(data))
-            except json.JSONDecodeError:
-                pass
-        if results:
-            return results
-
-    # 2. Plain JSON with "tool_calls" key
-    try:
-        data = json.loads(text)
-        if isinstance(data, dict) and "tool_calls" in data:
-            raw = data["tool_calls"]
-            raw_list = list(raw) if isinstance(raw, list) else []
-            return [_to_tool_call(_ensure_function_wrapper(tc)) for tc in raw_list if isinstance(tc, dict)]
-        if isinstance(data, list):
-            return [_to_tool_call(_ensure_function_wrapper(tc)) for tc in data if isinstance(tc, dict)]
-        if isinstance(data, dict) and "name" in data:
-            return [_to_tool_call(_ensure_function_wrapper(data))]
-    except json.JSONDecodeError:
-        pass
-
-    # 3. Code block fallback
-    code_block = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
-    if code_block:
-        try:
-            data = json.loads(code_block.group(1).strip())
-            if isinstance(data, dict) and "tool_calls" in data:
-                raw = data["tool_calls"]
-                raw_list = list(raw) if isinstance(raw, list) else []
-                return [_to_tool_call(_ensure_function_wrapper(tc)) for tc in raw_list if isinstance(tc, dict)]
-            if isinstance(data, dict) and "name" in data:
-                return [_to_tool_call(_ensure_function_wrapper(data))]
-            if isinstance(data, list) and data and isinstance(data[0], dict) and "name" in data[0]:
-                return [_to_tool_call(_ensure_function_wrapper(tc)) for tc in data]
-        except json.JSONDecodeError:
-            pass
-
-    # 4. Regex find JSON with "function" or "tool_calls" key
-    for pat in [r'\{[^{}]*"function"[^{}]*\{[^}]*\}[^{}]*\}', r'\{[^{}]*"tool_calls"[^{}]*\}']:
-        m = re.search(pat, text, re.DOTALL)
-        if m:
-            try:
-                data = json.loads(m.group(0))
-                if isinstance(data, dict) and "function" in data:
-                    return [_to_tool_call(data)]
-                if isinstance(data, dict) and "tool_calls" in data:
-                    raw = data["tool_calls"]
-                    raw_list = list(raw) if isinstance(raw, list) else []
-                    return [_to_tool_call(_ensure_function_wrapper(tc)) for tc in raw_list if isinstance(tc, dict)]
-            except json.JSONDecodeError:
-                pass
-
-    return []
+    return parse_tool_calls(text)
 
 
 async def _stream_response(
