@@ -276,10 +276,15 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
         metadata=provider_metadata(req.model),
     )
 
-    if req.stream and provider_adapter is not None and provider_adapter.name == "fake":
+    if req.stream:
         return StreamingResponse(
-            _stream_response(provider_adapter, provider_req, req.model),
+            _stream_response(provider_adapter, provider_req, req.model, has_tools=has_tools),
             media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
         )
 
     # OpenAI compatibility mode is a model gateway. It may return tool_calls,
@@ -361,8 +366,9 @@ async def _stream_response(
     adapter: Any,
     request: ProviderRequest,
     model: str,
+    has_tools: bool = False,
 ) -> AsyncGenerator[str, None]:
-    async for chunk in stream_response(adapter, request, model):
+    async for chunk in stream_response(adapter, request, model, has_tools=has_tools):
         yield chunk
 
 

@@ -9,6 +9,9 @@ class HealthResponse(BaseModel):
     status: str = "ok"
     version: str = ""
     providers: dict[str, str] = {}
+    models: list[str] = []
+    tool_count: int = 0
+    native_agent: bool = True
 
 
 class AskRequest(BaseModel):

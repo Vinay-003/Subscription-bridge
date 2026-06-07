@@ -38,10 +38,16 @@ def _get_deps(request: Request) -> AppDependencies:
 async def health(request: Request) -> HealthResponse:
     deps = _get_deps(request)
     providers = await deps.get_provider_healths()
+    from subscription_bridge.api.openai.model_catalog import build_models, build_native_tool_definitions
+    models = build_models()
+    tool_defs = build_native_tool_definitions()
     return HealthResponse(
         status="ok",
         version=__version__,
         providers=providers,
+        models=[m.id for m in models],
+        tool_count=len(tool_defs),
+        native_agent=True,
     )
 
 

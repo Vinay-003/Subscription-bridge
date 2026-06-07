@@ -49,10 +49,57 @@ DEFAULT_MODEL_OUTPUT_LIMITS: dict[str, int] = {
 
 
 def build_models() -> list[OpenAIModel]:
+    tool_defs = build_native_tool_definitions()
     config_models = _configured_models()
     if config_models:
-        return [OpenAIModel(id=model_id, owned_by="subscription-bridge") for model_id in config_models]
-    return [OpenAIModel(id=model_id, owned_by="subscription-bridge") for model_id in _default_model_ids()]
+        return [
+            OpenAIModel(id=model_id, owned_by="subscription-bridge", tools=tool_defs)
+            for model_id in config_models
+        ]
+    return [
+        OpenAIModel(id=model_id, owned_by="subscription-bridge", tools=tool_defs)
+        for model_id in _default_model_ids()
+    ]
+
+
+def build_native_tool_definitions() -> list[dict[str, Any]]:
+    from subscription_bridge.tools import (
+        BashTool,
+        CodebaseSearchTool,
+        FileEditTool,
+        FileReadTool,
+        FileWriteTool,
+        GitDiffTool,
+        GlobTool,
+        GrepTool,
+        PatchTool,
+        TodoWriteTool,
+    )
+
+    native_tools = [
+        FileReadTool(),
+        FileWriteTool(),
+        FileEditTool(),
+        GrepTool(),
+        GlobTool(),
+        BashTool(),
+        PatchTool(),
+        GitDiffTool(),
+        CodebaseSearchTool(),
+        TodoWriteTool(),
+    ]
+
+    definitions: list[dict[str, Any]] = []
+    for tool in native_tools:
+        definitions.append({
+            "type": "function",
+            "function": {
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": tool.input_schema if tool.input_schema else {"type": "object", "properties": {}},
+            },
+        })
+    return definitions
 
 
 def strip_provider_prefix(model_id: str) -> str:

@@ -392,3 +392,121 @@ def test_v1_tools_does_not_start_hidden_agent(monkeypatch: pytest.MonkeyPatch, c
     data = response.json()
     assert data["choices"][0]["finish_reason"] == "stop"
     assert data["choices"][0]["message"]["content"] == "Plain model answer"
+
+
+# ── Phase 9: Model catalog tool definitions ─────────────────────────────────
+
+
+def test_v1_models_includes_tool_definitions(client: TestClient) -> None:
+    response = client.get("/v1/models")
+    assert response.status_code == 200
+    data = response.json()
+    fake_model = next(m for m in data["data"] if m["id"] == "subscription-bridge-fake")
+    assert fake_model["tools"] is not None
+    assert len(fake_model["tools"]) >= 5
+    tool_names = [t["function"]["name"] for t in fake_model["tools"]]
+    assert "file_read" in tool_names
+    assert "file_write" in tool_names
+    assert "bash" in tool_names
+    assert "grep" in tool_names
+    assert "patch" in tool_names
+
+
+def test_v1_models_tool_definitions_have_schemas(client: TestClient) -> None:
+    response = client.get("/v1/models")
+    data = response.json()
+    fake_model = next(m for m in data["data"] if m["id"] == "subscription-bridge-fake")
+    for tool_def in fake_model["tools"]:
+        assert tool_def["type"] == "function"
+        assert "function" in tool_def
+        assert "name" in tool_def["function"]
+        assert "description" in tool_def["function"]
+        assert "parameters" in tool_def["function"]
+
+
+def test_build_native_tool_definitions_all_have_parameters() -> None:
+    from subscription_bridge.api.openai.model_catalog import build_native_tool_definitions
+
+    defs = build_native_tool_definitions()
+    assert len(defs) == 10
+    for d in defs:
+        assert d["type"] == "function"
+        assert isinstance(d["function"]["parameters"], dict)
+
+
+# ── Phase 9: Streaming for all providers ────────────────────────────────────
+
+
+def test_v1_streaming_works_for_fake_provider(client: TestClient) -> None:
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "subscription-bridge-fake",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "stream": True,
+        },
+    )
+    assert response.status_code == 200
+    assert "text/event-stream" in response.headers["content-type"]
+    assert "no-cache" in response.headers.get("cache-control", "")
+    lines = [line for line in response.text.splitlines() if line.startswith("data:")]
+    assert len(lines) >= 2
+    assert lines[-1] == "data: [DONE]"
+
+
+def test_v1_streaming_has_role_chunk(client: TestClient) -> None:
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "subscription-bridge-fake",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "stream": True,
+        },
+    )
+    lines = [line for line in response.text.splitlines() if line.startswith("data:") and line != "data: [DONE]"]
+    import json as _json
+    first_chunk = _json.loads(lines[0].removeprefix("data: "))
+    assert first_chunk["choices"][0]["delta"]["role"] == "assistant"
+
+
+def test_v1_streaming_with_tools_parses_tool_calls(client: TestClient) -> None:
+    import json as _json
+    response = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "subscription-bridge-fake",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "stream": True,
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "file_read",
+                        "description": "Read a file",
+                        "parameters": {"type": "object"},
+                    },
+                }
+            ],
+        },
+    )
+    assert response.status_code == 200
+    lines = [line for line in response.text.splitlines() if line.startswith("data:") and line != "data: [DONE]"]
+    chunks = [_json.loads(line.removeprefix("data: ")) for line in lines]
+    finish_chunks = [c for c in chunks if c["choices"][0].get("finish_reason") == "stop"]
+    assert len(finish_chunks) == 1
+
+
+# ── Phase 9: Health endpoint enrichment ─────────────────────────────────────
+
+
+def test_health_includes_models_and_tool_count(client: TestClient) -> None:
+    response = client.get("/health")
+    assert response.status_code == 200
+    data = response.json()
+    assert "models" in data
+    assert "tool_count" in data
+    assert "native_agent" in data
+    assert len(data["models"]) >= 1
+    assert "subscription-bridge-fake" in data["models"]
+    assert data["tool_count"] >= 5
+    assert data["native_agent"] is True
