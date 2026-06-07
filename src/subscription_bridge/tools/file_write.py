@@ -11,7 +11,7 @@ class FileWriteTool(Tool):
     description = (
         "Write content to a file in the workspace. Creates parent directories if needed. "
         "Use 'content' with the raw string to write. "
-        "For large files (>200 lines), use bash with a heredoc instead."
+        "For larger edits to existing files, prefer the patch tool."
     )
     input_schema = {
         "path": "string (required, file path relative to workspace)",
@@ -45,14 +45,14 @@ class FileWriteTool(Tool):
                 error="either 'content' or 'content_base64' is required",
             )
 
-        _GARBAGE_PATTERNS = {"YmFzZTY0", "base64", ""}
-        if content.strip() in _GARBAGE_PATTERNS and len(content.strip()) < 20:
+        garbage_patterns = {"YmFzZTY0", "base64", ""}
+        if content.strip() in garbage_patterns and len(content.strip()) < 20:
             return ToolResult(
                 name=self.name, success=False,
                 error=(
                     "Refusing to write garbage content. "
                     "The content field contains only a placeholder, not actual file content. "
-                    "Use 'content' with the full raw string, or use bash with a heredoc for large files."
+                    "Use 'content' with the full raw string, or use patch for larger edits."
                 ),
             )
 
