@@ -221,6 +221,134 @@ def test_c_source_content_in_file_write() -> None:
     assert 'printf(' in action.arguments["content"]
 
 
+def test_raw_newlines_in_file_write_content_are_escaped() -> None:
+    """Model emits invalid JSON with raw newlines inside string values.
+
+    The C-aware post-processor must convert raw newlines that appear *inside*
+    a C string literal (between two double quotes) into the 2-char \\n
+    sequence, while preserving real newlines that are *line breaks* in the C
+    source. This is the difference between a compilable C file and a broken
+    one.
+    """
+    text = (
+        '{\n'
+        '"type": "tool_call",\n'
+        '"tool_name": "file_write",\n'
+        '"arguments": {\n'
+        '"path": "calc.c",\n'
+        '"content": "#include <stdio.h>\n\nint main() {\n    printf(\\"hi\\n\\");\n    return 0;\n}"\n'
+        '}\n'
+        '}'
+    )
+    action = parse_agent_action(text)
+    assert action.action_type == "tool_call"
+    assert action.tool_name == "file_write"
+    content = action.arguments["content"]
+    assert 'printf("hi\\n");' in content, repr(content)
+    assert 'int main() {' in content
+    assert '    return 0;' in content
+    assert content.count("\\n") == 1, f"only the printf escape should be 2-char, got: {repr(content)}"
+    assert content.count("\n") >= 5, "line breaks should be preserved as real newlines"
+
+
+def test_raw_newline_in_c_calculator_compiles() -> None:
+    """End-to-end: a typical Gemini-style broken JSON tool call for a C file
+    with raw newlines inside the content string must produce compilable C
+    source (the raw newlines get escaped to the literal two-char sequence)."""
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    text = (
+        '{\n'
+        '"type": "tool_call",\n'
+        '"tool_name": "file_write",\n'
+        '"arguments": {\n'
+        '"path": "calc.c",\n'
+        '"content": "#include <stdio.h>\n\nint main() {\n'
+        '    int a, b;\n'
+        '    scanf(\\"%d %d\\", &a, &b);\n'
+        '    printf(\\"%d\\n\\", a + b);\n'
+        '    return 0;\n}"\n'
+        '}\n'
+        '}'
+    )
+    action = parse_agent_action(text)
+    assert action.action_type == "tool_call"
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "calc.c"
+        path.write_text(action.arguments["content"], encoding="utf-8")
+        result = subprocess.run(
+            ["gcc", "-c", str(path), "-o", str(path.with_suffix(".o"))],
+            capture_output=True, text=True, check=False,
+        )
+        assert result.returncode == 0, f"C source did not compile:\n{result.stderr}"
+
+
+def test_repair_escapes_raw_newlines_in_json_strings() -> None:
+    from subscription_bridge.parsing.repair import repair_json
+
+    text = (
+        '{"type":"tool_call","tool_name":"file_write",'
+        '"arguments":{"path":"a.c","content":"int main(){\nreturn 0;\n}"}}'
+    )
+    repaired = repair_json(text)
+    import json as _json
+    parsed = _json.loads(repaired)
+    assert parsed["arguments"]["content"] == "int main(){\nreturn 0;\n}"
+
+
+def test_broken_gemini_calculator_compiles_and_runs() -> None:
+    """End-to-end test: a typical broken Gemini output with raw newlines
+    inside printf string literals must be reparsed into a compilable,
+    runnable C calculator.
+
+    This mirrors the real failure mode reported in the wild: the model
+    emits a JSON tool call but forgets to escape newlines that should
+    have been the 2-char \\n inside a C string literal. The post-processor
+    in the parser must distinguish 'line break' newlines (preserve as-is)
+    from 'C string literal' newlines (convert to 2-char \\n) so the
+    resulting C source is valid and the calculator runs correctly.
+    """
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    text = (
+        '{\n'
+        '  "type": "tool_call",\n'
+        '  "tool_name": "file_write",\n'
+        '  "arguments": {\n'
+        '    "path": "calculator.c",\n'
+        '    "content": "#include <stdio.h>\\n\\nint main() {\\n'
+        '    char op;\\n'
+        '    double a, b;\\n'
+        '    scanf(\\"%lf %lf\\", &a, &b);\\n'
+        '    printf(\\"sum = %.2lf\\n\\", a + b);\\n'
+        '    return 0;\\n}"\n'
+        '  }\n'
+        '}'
+    )
+    action = parse_agent_action(text)
+    assert action.action_type == "tool_call"
+    assert action.tool_name == "file_write"
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "calculator.c"
+        path.write_bytes(action.arguments["content"].encode("utf-8"))
+        bin_path = Path(td) / "calculator"
+        result = subprocess.run(
+            ["gcc", str(path), "-o", str(bin_path), "-lm"],
+            capture_output=True, text=True, check=False,
+        )
+        assert result.returncode == 0, f"C source did not compile:\n{result.stderr}"
+        run = subprocess.run(
+            [str(bin_path)], input="2.5 4.0\n",
+            capture_output=True, text=True, check=False,
+        )
+        assert run.returncode == 0
+        assert "6.50" in run.stdout
+
+
 def test_plain_text_final_fallback() -> None:
     text = "I have created the file successfully."
     action = parse_agent_action(text)

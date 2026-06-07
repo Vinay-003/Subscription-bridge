@@ -47,3 +47,12 @@ class ProviderResponseError(AgentError):
     def __init__(self, provider: str, message: str = "") -> None:
         self.provider = provider
         super().__init__(f"Provider {provider!r} error: {message}")
+
+
+class AgentStuckError(AgentError):
+    """Raised when the loop detector sees the model repeating the same tool
+    call without making progress."""
+
+    def __init__(self, tool_name: str, message: str = "") -> None:
+        self.tool_name = tool_name
+        super().__init__(message)

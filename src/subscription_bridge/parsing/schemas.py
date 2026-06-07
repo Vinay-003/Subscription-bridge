@@ -114,9 +114,15 @@ class AgentAction(BaseModel):
             return cls.from_tool_call(data)
         if action_type == "final":
             return cls.from_final(data)
+        if action_type == "text":
+            return cls(
+                action_type="final",
+                thought="",
+                answer=data.get("content", data.get("answer", "")),
+            )
         if action_type == "ask_clarification":
             return cls.from_clarification(data)
         if action_type == "create_plan":
             return cls.from_create_plan(data)
-        valid_types = ["tool_call", "final", "ask_clarification", "create_plan"]
+        valid_types = ["tool_call", "final", "text", "ask_clarification", "create_plan"]
         raise ValueError(f"Unknown action type {action_type!r}. Expected one of {valid_types}")

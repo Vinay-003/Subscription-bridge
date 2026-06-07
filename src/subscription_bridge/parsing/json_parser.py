@@ -7,6 +7,7 @@ from subscription_bridge.core.errors import ParserError
 from subscription_bridge.logging.logger import get_logger
 from subscription_bridge.parsing.repair import (
     extract_first_json,
+    fix_code_string_newlines,
     repair_json,
     strip_code_fences,
     try_parse_action_input,
@@ -64,13 +65,29 @@ def _try_parse_candidate(text: str) -> AgentAction | None:
     if result is not None:
         return result
 
+    repaired = repair_json(text)
+    if repaired != text:
+        result = _try_direct_parse(repaired)
+        if result is not None:
+            return result
+
     result = _try_openai_tool_calls(text)
     if result is not None:
         return result
 
+    if repaired != text:
+        result = _try_openai_tool_calls(repaired)
+        if result is not None:
+            return result
+
     result = _try_alternative_format_parse(text)
     if result is not None:
         return result
+
+    if repaired != text:
+        result = _try_alternative_format_parse(repaired)
+        if result is not None:
+            return result
 
     result = _regex_extract_action(text)
     if result is not None:
@@ -113,11 +130,17 @@ def _try_direct_parse(text: str) -> AgentAction | None:
     return action
 
 
+_CODE_LIKE_KEYS = frozenset({"content", "command", "replace", "search", "question", "answer", "thought"})
+
+
 def _normalize_arguments(args: dict[str, Any]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in args.items():
         if isinstance(value, str):
-            result[key] = value
+            if key in _CODE_LIKE_KEYS:
+                result[key] = fix_code_string_newlines(value)
+            else:
+                result[key] = value
         elif isinstance(value, (int, float, bool)):
             result[key] = str(value)
         else:
@@ -224,12 +247,16 @@ def _regex_extract_action(text: str) -> AgentAction | None:
         while idx < len(source):
             ch = source[idx]
             if escape_next:
-                result.append(ch)
+                if ch == '"':
+                    result.append('"')
+                elif ch == "\\":
+                    result.append("\\")
+                else:
+                    result.append(ch)
                 escape_next = False
                 idx += 1
                 continue
             if ch == "\\":
-                result.append(ch)
                 escape_next = True
                 idx += 1
                 continue
@@ -237,8 +264,31 @@ def _regex_extract_action(text: str) -> AgentAction | None:
                 look = idx + 1
                 while look < len(source) and source[look].isspace():
                     look += 1
-                if look >= len(source) or source[look] in (",", "}"):
+                if look >= len(source):
                     break
+                if source[look] == "}":
+                    after = look + 1
+                    while after < len(source) and source[after].isspace():
+                        after += 1
+                    if after >= len(source) or source[after] == ",":
+                        break
+                    if source[after] == "}":
+                        further = after + 1
+                        while further < len(source) and source[further].isspace():
+                            further += 1
+                        if further >= len(source) or source[further] in (",", "}"):
+                            break
+                    result.append('"')
+                    idx += 1
+                    continue
+                if source[look] == ",":
+                    check = look + 1
+                    while check < len(source) and source[check].isspace():
+                        check += 1
+                    if check < len(source) and source[check] == '"':
+                        key_end = source.find('"', check + 1)
+                        if key_end > check and key_end + 1 < len(source) and source[key_end + 1 : key_end + 2] == ":":
+                            break
                 result.append('"')
                 idx += 1
                 continue
@@ -246,8 +296,7 @@ def _regex_extract_action(text: str) -> AgentAction | None:
             idx += 1
         if not result:
             return None
-        val = "".join(result)
-        return val.replace('\\"', '"').replace("\\n", "\n").replace("\\t", "\t")
+        return "".join(result)
 
     if '"type":"final"' in text or '"type": "final"' in text:
         m = _re.search(r'"answer"\s*:\s*"((?:[^"\\]|\\.)*)"', text, _re.DOTALL)
@@ -279,12 +328,12 @@ def _regex_extract_action(text: str) -> AgentAction | None:
         if key in loose_keys:
             loose = _extract_loose_string_value(text, key)
             if loose is not None:
-                args[key] = loose
+                args[key] = fix_code_string_newlines(loose)
                 continue
         m = _re.search(rf'"{key}"\s*:\s*"((?:[^"\\]|\\.)*)"', text, _re.DOTALL)
         if m:
             val = m.group(1).replace('\\"', '"').replace("\\n", "\n").replace("\\t", "\t")
-            args[key] = val
+            args[key] = fix_code_string_newlines(val)
 
     return AgentAction(
         action_type="tool_call",

@@ -75,7 +75,15 @@ class AgentRuntime:
             workspace=task.workspace,
             mode=task.mode,
         )
-        state.max_steps = task.max_steps or self._max_steps
+        # The Task dataclass has max_steps=10 as its default, so a
+        # truthy 'task.max_steps or self._max_steps' would always pick
+        # the task default and silently ignore the runtime's value.
+        # Use a None/0 sentinel to detect "not set on the task".
+        explicit_max = getattr(task, "max_steps", None)
+        if explicit_max is None or explicit_max <= 0:
+            state.max_steps = self._max_steps
+        else:
+            state.max_steps = explicit_max
 
         tool_executor = ToolExecutor(self._tool_registry, workspace=task.workspace)
 

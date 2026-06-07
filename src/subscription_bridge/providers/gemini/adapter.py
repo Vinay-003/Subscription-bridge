@@ -71,8 +71,9 @@ class GeminiProviderAdapter(ProviderAdapter):
 
             requested_variant = _extract_model_variant(request)
             requested_thinking = _extract_thinking_enabled(request)
-            detected_before = await _detect_model_label(session.page)
-            if requested_variant:
+
+            if requested_variant and session.selected_model_variant != requested_variant:
+                detected_before = await _detect_model_label(session.page)
                 logger.info(
                     "model_switch_requested",
                     requested=requested_variant,
@@ -80,7 +81,6 @@ class GeminiProviderAdapter(ProviderAdapter):
                     detected_before=detected_before,
                     run_id=request.run_id,
                 )
-            if requested_variant and session.selected_model_variant != requested_variant:
                 switched = await _switch_model_variant(session.page, requested_variant)
                 detected_after = await _detect_model_label(session.page)
                 if switched:

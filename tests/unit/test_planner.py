@@ -12,14 +12,29 @@ def test_system_prompt_includes_tools() -> None:
     prompt = build_system_prompt(tools)
     assert "file_read" in prompt
     assert "grep" in prompt
-    assert "STRICT JSON" in prompt
     assert "tool_call" in prompt
-    assert "final" in prompt
 
 
 def test_system_prompt_empty_tools() -> None:
     prompt = build_system_prompt([])
-    assert "STRICT JSON" in prompt
+    assert "tool_call" in prompt
+
+
+def test_system_prompt_is_agentic() -> None:
+    """The prompt must tell the model to call tools for file creation tasks,
+    not just describe the code in the 'answer' field. This is the main
+    defense against models that try to be helpful by responding with prose
+    instead of using the available tools.
+    """
+    prompt = build_system_prompt([
+        {"name": "file_write", "description": "Write file", "input_schema": {"path": "string", "content": "string"}},
+        {"name": "bash", "description": "Run shell", "input_schema": {"command": "string"}},
+    ])
+    assert "AGENTIC" in prompt
+    assert "MUST call a tool" in prompt
+    assert "MUST use the file_write" in prompt
+    assert "MUST use the bash" in prompt
+    assert "NEVER just describe" in prompt
 
 
 def test_user_prompt_includes_task() -> None:

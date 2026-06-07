@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from subscription_bridge.core.agent_state import AgentState
 from subscription_bridge.core.errors import ProviderResponseError
@@ -16,11 +16,12 @@ from subscription_bridge.logging.events import (
     TOOL_COMPLETED,
 )
 from subscription_bridge.logging.logger import get_logger
-from subscription_bridge.parsing.json_parser import parse_agent_action
-from subscription_bridge.parsing.schemas import AgentAction
 from subscription_bridge.providers.base import ProviderAdapter, ProviderRequest
 from subscription_bridge.tools.executor import ToolExecutor
 from subscription_bridge.utils.security import sanitize_for_log
+
+if TYPE_CHECKING:
+    from subscription_bridge.parsing.schemas import AgentAction
 
 logger = get_logger(__name__)
 
@@ -114,8 +115,12 @@ class LoopController:
             )
 
         except Exception as e:
-            state.fail(str(e))
-            logger.error(RUN_FAILED, run_id=state.run_id, error=str(e))
+            from subscription_bridge.core.errors import AgentStuckError
+            if isinstance(e, AgentStuckError):
+                logger.warning(RUN_FAILED, run_id=state.run_id, error=str(e), status="stuck")
+            else:
+                state.fail(str(e))
+                logger.error(RUN_FAILED, run_id=state.run_id, error=str(e))
             return RunResult(
                 success=False,
                 error=str(e),
@@ -127,6 +132,8 @@ class LoopController:
             )
 
     async def _execute_step(self, state: AgentState, step: int) -> tuple[AgentAction, str | None]:
+        from subscription_bridge.parsing.json_parser import parse_agent_action
+
         prompt = self._planner.build_prompt(state)
 
         logger.info(PROMPT_SENT, run_id=state.run_id, step=step, prompt_size=len(prompt))
@@ -153,8 +160,40 @@ class LoopController:
         action = parse_agent_action(provider_response.text)
 
         if action.action_type == "tool_call":
+            if state.is_stuck(action.tool_name, action.arguments, threshold=3):
+                last_error = state.observations[-1].tool_result if state.observations else ""
+                msg = (
+                    f"Agent is stuck: the same '{action.tool_name}' call has been "
+                    f"retried 3+ times with identical arguments. The model is not "
+                    f"making progress. Last tool output:\n{last_error[:1500]}"
+                )
+                state.mark_stuck(msg)
+                logger.warning(
+                    "agent_stuck",
+                    run_id=state.run_id,
+                    step=step,
+                    tool=action.tool_name,
+                )
+                from subscription_bridge.core.errors import AgentStuckError
+                raise AgentStuckError(action.tool_name, msg)
             tool_result = await self._execute_tool(state, step, action)
             return action, tool_result
+
+        if action.action_type == "final" and state.is_repeating_tool_failure(threshold=3):
+            last_error = state.observations[-1].tool_result if state.observations else ""
+            msg = (
+                f"Agent is stuck: the last 3+ tool calls failed with similar errors. "
+                f"The model emitted a 'final' answer despite not making progress. "
+                f"Last tool output:\n{last_error[:1500]}"
+            )
+            state.mark_stuck(msg)
+            logger.warning(
+                "agent_stuck_final",
+                run_id=state.run_id,
+                step=step,
+            )
+            from subscription_bridge.core.errors import AgentStuckError
+            raise AgentStuckError("final", msg)
 
         return action, None
 
@@ -205,6 +244,7 @@ class LoopController:
             action={"tool_name": action.tool_name, "arguments": action.arguments},
             result=safe_output or "",
             success=result.success,
+            error=result.error or "",
         )
 
         return safe_output or ""

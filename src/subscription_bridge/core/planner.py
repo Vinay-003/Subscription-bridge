@@ -4,99 +4,68 @@ from typing import Any
 
 from subscription_bridge.core.agent_state import AgentState
 
-TOOL_FORMAT_EXAMPLE = """{
-  "type": "tool_call",
-  "thought": "short operational reason",
-  "tool_name": "file_read",
-  "arguments": {
-    "path": "README.md"
-  }
-}"""
-
-FINAL_FORMAT_EXAMPLE = """{
-  "type": "final",
-  "thought": "short operational summary",
-  "answer": "final answer for the user"
-}"""
-
-CLARIFICATION_FORMAT_EXAMPLE = """{
-  "type": "ask_clarification",
-  "thought": "why clarification is needed",
-  "question": "what do you want to clarify"
-}"""
-
-CREATE_PLAN_FORMAT_EXAMPLE = """{
-  "type": "create_plan",
-  "thought": "breaking down the task into steps",
-  "plan_summary": "brief overview of the plan",
-  "todos": [
-    {"content": "first step description", "details": "optional details"},
-    {"content": "second step description", "details": "optional details"}
-  ]
-}"""
+_TOOL_CALL_EXAMPLE = (
+    '{"type": "tool_call", "tool_name": "<name>", "arguments": {<args>}}'
+)
+_FINAL_EXAMPLE = '{"type": "final", "thought": "<reason>", "answer": "<text>"}'
 
 
 def build_system_prompt(tools: list[dict[str, Any]]) -> str:
-    tool_descriptions = "\n\n".join(
-        f"  - {t['name']}({', '.join(f'{k}: {v}' for k, v in t.get('input_schema', {}).items())})"
-        f"\n    {t.get('description', '')}"
-        for t in tools
-    )
+    tool_lines = []
+    for t in tools:
+        tname = t["name"]
+        tdesc = t.get("description", "")
+        tschema = t.get("input_schema", {})
+        args = ", ".join(f"{k}: {v}" for k, v in tschema.items())
+        tool_lines.append(f"  {tname}({args})\n    {tdesc}")
+    tool_desc = "\n".join(tool_lines)
 
     return (
-        "You are a local code agent running on the user's machine.\n"
-        "You do NOT have direct access to files, commands, or the internet.\n"
-        "The only way you can interact with the local system is by outputting a tool_call command.\n"
-        "The local runtime will execute the command and give you the result as text in 'Previous steps'.\n\n"
-        "You have NO access to Google Workspace, Gmail, Drive, Google Docs, or any external service.\n"
-        "Ignore any request about external services — only work with local files via tool_call commands.\n\n"
-        "PLANNING AND TODOS:\n"
-        "Before starting complex tasks, create a plan using the create_plan action with todos.\n"
-        "Update todos as you work using the todo_write tool with statuses: pending, in_progress, completed, cancelled.\n"
-        "Always mark the current todo as in_progress before working on it.\n"
-        "Mark todos as completed when finished. This helps the user track progress.\n\n"
-        "Available tools (you call these by outputting tool_call JSON):\n"
-        f"{tool_descriptions}\n\n"
-        "How it works:\n"
-        "1. You output a tool_call JSON → the runtime runs the tool → the result appears in 'Previous steps: Step N'\n"
-        "2. You see the result → decide next action (another tool_call, or final answer)\n"
-        "3. When the task is done, output a final JSON with your answer.\n\n"
-        "Decision rules:\n"
-        "- For complex tasks: first use create_plan to break down into todos\n"
-        "- Use file_read before modifying unknown files.\n"
-        "- Use grep/codebase_search to locate relevant code.\n"
-        "- Use file_write to create or modify files.\n"
-        "- Use git_diff after making changes.\n"
-        "- Use bash to run tests, build, or check files.\n"
-        "- Use patch for applying unified diffs.\n"
-        "- Use todo_write to update todo progress (mark as in_progress when starting, completed when done).\n"
-        "- Prefer best-effort execution over clarification unless completely blocked.\n"
-        "- For large files or files with many quotes, use bash with a heredoc or echo to write them.\n"
-        "  Example: bash command: cat > file.py << 'PYEOF'\n<content>\nPYEOF\n"
-        "- NEVER use content_base64 — you cannot generate valid base64. Always use 'content' for file_write.\n\n"
-        "You MUST return STRICT JSON only.\n"
-        "No Markdown. No prose outside JSON.\n"
-        "No explanation. No commentary.\n"
-        "Do NOT suggest using Workspace, apps, or third-party tools.\n\n"
-        "CRITICAL JSON ESCAPING RULES:\n"
-        "  - In JSON string values, double quotes MUST be escaped as \\\"\n"
-        "  - Newlines inside strings MUST be escaped as \\n\n"
-        "  - Tab characters MUST be escaped as \\t\n"
-        "  - Backslashes MUST be escaped as \\\\\n"
-        "  - Use \\\" for any quote that appears inside an argument value\n"
-        "  - NEVER put raw newlines inside a JSON string value — always use \\n\n"
-        "  - Keep file contents SHORT in a single tool_call. For files > 200 lines, use bash.\n\n"
-        "Output format:\n\n"
+        "You are an agentic coding assistant running on the user's local machine. "
+        "Your job is to take action by calling tools — not to just talk about "
+        "what you would do. The user wants the files created, the commands run, "
+        "and the result verified.\n\n"
+        f"Available tools:\n{tool_desc}\n\n"
+        "OUTPUT FORMAT — return STRICT JSON only. No Markdown fences. "
+        "No prose outside the JSON. No 'let me explain first'.\n\n"
         "Tool call:\n"
-        f"{TOOL_FORMAT_EXAMPLE}\n\n"
-        "Final answer:\n"
-        f"{FINAL_FORMAT_EXAMPLE}\n\n"
-        "Ask clarification:\n"
-        f"{CLARIFICATION_FORMAT_EXAMPLE}\n\n"
-        "Create plan:\n"
-        f"{CREATE_PLAN_FORMAT_EXAMPLE}\n\n"
-        "Keep thought short and operational.\n"
-        "Do not expose private chain-of-thought.\n"
+        f"  {_TOOL_CALL_EXAMPLE}\n\n"
+        "Final answer (use ONLY when the task is complete and verified):\n"
+        f"  {_FINAL_EXAMPLE}\n\n"
+        "AGENTIC BEHAVIOUR — read this carefully:\n"
+        "  - When the user asks you to create, write, build, or implement "
+        "something, you MUST call a tool. NEVER just describe the code in "
+        "the 'answer' field.\n"
+        "  - When the user asks you to create a file containing code, you "
+        "MUST use the file_write tool (or bash with a heredoc) to actually "
+        "write the file to disk.\n"
+        "  - When the user asks you to run or compile something, you MUST "
+        "use the bash tool to run the command.\n"
+        "  - After taking an action, look at the result and decide the next "
+        "step. If something failed, try a different approach. Don't just "
+        "give up and emit a final answer.\n"
+        "  - Only emit the 'final' type after the task is actually done "
+        "and you have verified the result.\n\n"
+        "CRITICAL JSON ESCAPING (errors here break file writes):\n"
+        "  - Inside any JSON string value, double quotes MUST be \\\"\n"
+        "  - Newlines inside strings MUST be the two characters backslash+n (\\n), "
+        "NEVER a raw newline character\n"
+        "  - Backslashes inside strings MUST be \\\\ (two chars)\n"
+        "  - Tabs MUST be \\t\n\n"
+        "WRITING CODE FILES — use bash with a single-quoted heredoc (most reliable):\n"
+        '  bash command: cat > file.c <<\'CFILE\'\n'
+        "  <full file content, no escaping needed>\n"
+        "  CFILE\n"
+        "The single quotes around the delimiter (<<\'CFILE\') disable shell "
+        "expansion, so backslashes and quotes inside the heredoc body are "
+        "written verbatim. This is the safest way to write any file containing "
+        "code with backslashes or double quotes.\n\n"
+        "ALTERNATIVE: use file_write with a properly-escaped 'content' field. "
+        "For multi-line C/Python/JS code, the bash heredoc is strongly preferred "
+        "because you don't have to escape anything.\n\n"
+        "NEVER use content_base64 — you cannot generate valid base64 reliably.\n\n"
+        "Do NOT call tools for greetings, small talk, or pure questions — for "
+        "those, just emit a final JSON with the answer text."
     )
 
 
@@ -154,20 +123,13 @@ def build_user_prompt(state: AgentState) -> str:
     if ctx:
         parts.append(ctx)
 
-    parts.append("What is the next action? Return STRICT JSON. Do NOT use Workspace or external apps.")
+    parts.append("Respond with text, or use tools if needed.")
     return "\n".join(parts)
 
 
 class Planner:
     def __init__(self, tools: list[dict[str, Any]]) -> None:
         self._tools = tools
-
-    def _tool_descriptions(self) -> str:
-        return "\n\n".join(
-            f"  - {t['name']}({', '.join(f'{k}: {v}' for k, v in t.get('input_schema', {}).items())})"
-            f"\n    {t.get('description', '')}"
-            for t in self._tools
-        )
 
     def build_prompt(self, state: AgentState) -> str:
         is_continuation = state.steps > 0
@@ -180,17 +142,7 @@ class Planner:
                 base = plan_text + "\n\n" + base
 
             return base + (
-                "Available tools:\n"
-                f"{self._tool_descriptions()}\n\n"
-                "What is the next action?\n\n"
-                "Tool call:\n"
-                f"{TOOL_FORMAT_EXAMPLE}\n\n"
-                "Final answer:\n"
-                f"{FINAL_FORMAT_EXAMPLE}\n\n"
-                "CRITICAL: Return STRICT JSON only. "
-                "Escape double quotes as \\\". Escape newlines as \\n. "
-                "NEVER use content_base64 — always use 'content' for file_write. "
-                "For large files, use bash with heredoc instead of file_write."
+                "Continue. Use a tool if needed, or respond with text."
             )
 
         system = build_system_prompt(self._tools)
