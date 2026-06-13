@@ -30,13 +30,24 @@ def convert_messages(
     system_parts: list[str] = []
     conversation: list[str] = []
 
+    # If the transcript already contains an assistant turn, the browser chat is
+    # a continuation: earlier turns are already in its history. Only send the
+    # turns after the last assistant message to avoid re-sending the whole
+    # transcript (and the heavy preamble) on every step.
+    relevant = _tail_after_last_assistant(messages)
+
     for msg in messages:
+        if msg.role == "system":
+            raw = extract_text(msg.content) if msg.content else ""
+            system_parts.append(_compact_system_prompt(raw))
+
+    for msg in relevant:
         role = msg.role
         content = msg.content
         text = extract_text(content) if content else ""
 
         if role == "system":
-            system_parts.append(text)
+            continue
         elif role == "user":
             conversation.append(f"User: {text}")
         elif role == "assistant":
@@ -68,6 +79,86 @@ def convert_messages(
 
     prompt = "\n".join(parts).strip()
     return prompt, system_prompt
+
+
+# Markers that identify OpenCode's large client-side system prompt. We only
+# compact a system message when several of these appear, so unrelated system
+# messages (e.g. project AGENTS.md content) are never touched.
+_OPENCODE_MARKERS = (
+    "You are opencode",
+    "# Core Mandates",
+    "# Primary Workflows",
+    "# Operational Guidelines",
+)
+
+_COMPACT_OPENCODE_PROMPT = (
+    "You are opencode, a coding agent running on the user's local machine in a "
+    "trusted development environment. Take action by calling tools to get the "
+    "task done (create/edit files, run commands, verify). Treat ordinary coding "
+    "requests as safe and just do them.\n\n"
+    "Key rules:\n"
+    "- Use absolute file paths built from the working directory.\n"
+    "- Match existing project conventions, style, and dependencies.\n"
+    "- After changing code, run the project's lint/test commands when available.\n"
+    "- Do not revert changes unless asked. Briefly explain destructive shell "
+    "commands before running them.\n"
+    "- Be concise. Use tools for actions; use text only to communicate."
+)
+
+
+def _compact_system_prompt(text: str) -> str:
+    """Replace OpenCode's bulky preamble with a compact, behaviour-preserving core.
+
+    Detection requires at least two known markers so we never rewrite arbitrary
+    system messages. Anything that is not recognised is returned unchanged.
+
+    The available-skills list is preserved: the model can load skills via the
+    local `skill` tool, so it must still see which skills exist.
+    """
+    if not text:
+        return text
+    hits = sum(1 for marker in _OPENCODE_MARKERS if marker in text)
+    if hits < 2:
+        return text
+
+    parts = [_COMPACT_OPENCODE_PROMPT]
+    skills = _extract_skills_section(text)
+    if skills:
+        parts.append(skills)
+    return "\n\n".join(parts)
+
+
+def _extract_skills_section(text: str) -> str:
+    """Pull the skills list out of OpenCode's prompt so it survives compaction.
+
+    Returns the <available_skills>...</available_skills> block, prefixed with a
+    short reminder on how to load a skill. Empty string if no skills block.
+    """
+    match = re.search(r"<available_skills>.*?</available_skills>", text, re.DOTALL)
+    if not match:
+        return ""
+    block = match.group(0).strip()
+    reminder = (
+        "Skills provide specialized instructions for specific tasks. Load a "
+        "skill with the `skill` tool when a task matches its description."
+    )
+    return f"{reminder}\n{block}"
+
+
+def _tail_after_last_assistant(messages: list[Any]) -> list[Any]:
+    """Return only the messages after the last assistant turn.
+
+    When there is no assistant turn yet (the very first request) the full list
+    is returned so the initial context is sent in one shot.
+    """
+    last_assistant = -1
+    for idx, msg in enumerate(messages):
+        if getattr(msg, "role", None) == "assistant":
+            last_assistant = idx
+    if last_assistant < 0:
+        return list(messages)
+    tail = messages[last_assistant + 1 :]
+    return list(tail) if tail else list(messages)
 
 
 def extract_text(content: str | list[dict[str, Any]]) -> str:
