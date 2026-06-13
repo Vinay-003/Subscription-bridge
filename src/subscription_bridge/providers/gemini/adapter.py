@@ -66,7 +66,11 @@ class GeminiProviderAdapter(ProviderAdapter):
         try:
             session = await self._pool.acquire("gemini", request.run_id, self._page_factory)
 
-            if request.system_prompt:
+            # Only inject the (potentially huge) system prompt on the first turn of
+            # a conversation. On continuations the browser chat already holds it in
+            # history; re-sending it every turn is wasteful and buries the actual
+            # task, which makes the model refuse or lose context.
+            if request.system_prompt and not session.has_active_conversation:
                 prompt = request.system_prompt + "\n\n" + prompt
 
             requested_variant = _extract_model_variant(request)

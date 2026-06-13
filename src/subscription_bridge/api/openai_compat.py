@@ -266,8 +266,12 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
         if isinstance(msg.content, list):
             attachments.extend(_extract_images_from_content(msg.content))
 
+    # Always derive a stable conversation id from the leading messages so the
+    # same browser chat (and its history) is reused across turns. Using a fresh
+    # uuid per tool turn forced a brand-new chat every time, which re-sent the
+    # full system prompt and dropped all prior context.
     provider_req = ProviderRequest(
-        run_id=_conversation_id(req.messages) if not has_tools else f"api-v1-{uuid.uuid4().hex[:8]}",
+        run_id=_conversation_id(req.messages),
         prompt=prompt,
         system_prompt=system_prompt or None,
         attachments=attachments or None,
