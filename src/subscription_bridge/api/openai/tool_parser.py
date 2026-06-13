@@ -26,6 +26,13 @@ def parse_tool_calls(text: str) -> list[ToolCall]:
     if not text:
         return []
 
+    # 0. Sentinel protocol (<<<TOOLCALL:...>>> ... <<<END>>>). This is the
+    #    format the bridge instructs the model to use; it cannot be broken by
+    #    unescaped quotes or newlines because bodies are captured verbatim.
+    sentinel_result = _parse_sentinel_tool_calls(text)
+    if sentinel_result:
+        return sentinel_result
+
     # 1. <tool_call>...</tool_call> XML wrappers (one or more).
     xml_result = _parse_xml_tool_calls(text)
     if xml_result:
@@ -200,6 +207,57 @@ def _decode_loose(raw: str) -> str:
         .replace('\\"', '"')
         .replace("\\\\", "\\")
     )
+
+
+_SENTINEL_TOOLCALL = re.compile(r"<<<TOOLCALL:([A-Za-z0-9_.\-]+)>>>(.*?)<<<END>>>", re.DOTALL)
+_SENTINEL_ARG = re.compile(r"<<<ARG:([A-Za-z0-9_.\-]+)>>>\n?")
+
+
+def _parse_sentinel_tool_calls(text: str) -> list[ToolCall]:
+    """Parse the sentinel tool-call protocol.
+
+    Format::
+
+        <<<TOOLCALL:name>>>
+        <<<ARG:key>>>
+        <verbatim value, any characters>
+        <<<ARG:key2>>>
+        <value>
+        <<<END>>>
+
+    Argument bodies are captured literally between markers, so embedded quotes,
+    newlines, and backslashes never break parsing. Each captured value is then
+    JSON-encoded by the bridge when building the tool call.
+    """
+    calls: list[ToolCall] = []
+    for idx, match in enumerate(_SENTINEL_TOOLCALL.finditer(text), start=1):
+        name = match.group(1)
+        body = match.group(2)
+        args = _parse_sentinel_args(body)
+        calls.append(
+            ToolCall(
+                id=f"call_{idx}",
+                type="function",
+                function=FunctionCall(name=name, arguments=json.dumps(args)),
+            )
+        )
+    return calls
+
+
+def _parse_sentinel_args(body: str) -> dict[str, Any]:
+    """Split a sentinel body into {arg_name: verbatim_value}."""
+    args: dict[str, Any] = {}
+    markers = list(_SENTINEL_ARG.finditer(body))
+    for i, m in enumerate(markers):
+        key = m.group(1)
+        value_start = m.end()
+        value_end = markers[i + 1].start() if i + 1 < len(markers) else len(body)
+        value = body[value_start:value_end]
+        # Trim a single leading/trailing newline introduced by the layout,
+        # but preserve interior whitespace and intentional blank lines.
+        value = value.strip("\n")
+        args[key] = value
+    return args
 
 
 def _parse_xml_tool_calls(text: str) -> list[ToolCall]:

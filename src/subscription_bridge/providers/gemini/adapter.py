@@ -127,8 +127,8 @@ class GeminiProviderAdapter(ProviderAdapter):
             else:
                 upload_meta = {}
 
-            if request.require_json and not any(marker in prompt for marker in ["STRICT JSON", "Return STRICT JSON"]):
-                prompt += "\n\nYou MUST return STRICT JSON only. No Markdown. No prose outside JSON."
+            # Tool-call output format is fully specified by the sentinel protocol
+            # in the system prompt; do not append a contradictory JSON directive.
 
             await find_composer(session.page)
             await set_prompt_text(session.page, prompt)
