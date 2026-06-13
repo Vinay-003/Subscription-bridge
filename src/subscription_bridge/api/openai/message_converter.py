@@ -30,13 +30,23 @@ def convert_messages(
     system_parts: list[str] = []
     conversation: list[str] = []
 
+    # If the transcript already contains an assistant turn, the browser chat is
+    # a continuation: earlier turns are already in its history. Only send the
+    # turns after the last assistant message to avoid re-sending the whole
+    # transcript (and the heavy preamble) on every step.
+    relevant = _tail_after_last_assistant(messages)
+
     for msg in messages:
+        if msg.role == "system":
+            system_parts.append(extract_text(msg.content) if msg.content else "")
+
+    for msg in relevant:
         role = msg.role
         content = msg.content
         text = extract_text(content) if content else ""
 
         if role == "system":
-            system_parts.append(text)
+            continue
         elif role == "user":
             conversation.append(f"User: {text}")
         elif role == "assistant":
@@ -68,6 +78,22 @@ def convert_messages(
 
     prompt = "\n".join(parts).strip()
     return prompt, system_prompt
+
+
+def _tail_after_last_assistant(messages: list[Any]) -> list[Any]:
+    """Return only the messages after the last assistant turn.
+
+    When there is no assistant turn yet (the very first request) the full list
+    is returned so the initial context is sent in one shot.
+    """
+    last_assistant = -1
+    for idx, msg in enumerate(messages):
+        if getattr(msg, "role", None) == "assistant":
+            last_assistant = idx
+    if last_assistant < 0:
+        return list(messages)
+    tail = messages[last_assistant + 1 :]
+    return list(tail) if tail else list(messages)
 
 
 def extract_text(content: str | list[dict[str, Any]]) -> str:
