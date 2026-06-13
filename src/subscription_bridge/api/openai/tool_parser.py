@@ -26,6 +26,13 @@ def parse_tool_calls(text: str) -> list[ToolCall]:
     if not text:
         return []
 
+    # 0. Sentinel protocol (<<<TOOLCALL:...>>> ... <<<END>>>). This is the
+    #    format the bridge instructs the model to use; it cannot be broken by
+    #    unescaped quotes or newlines because bodies are captured verbatim.
+    sentinel_result = _parse_sentinel_tool_calls(text)
+    if sentinel_result:
+        return sentinel_result
+
     # 1. <tool_call>...</tool_call> XML wrappers (one or more).
     xml_result = _parse_xml_tool_calls(text)
     if xml_result:
@@ -38,6 +45,13 @@ def parse_tool_calls(text: str) -> list[ToolCall]:
         result = _tool_calls_from_text(candidate)
         if result:
             return result
+
+    # 3. Last resort: the model emitted a tool call whose argument string holds
+    #    raw, unescaped code (unescaped quotes / literal newlines), which no
+    #    JSON parser can load. Reconstruct it structurally from the key anchors.
+    recovered = _recover_toolcall_with_raw_args(text)
+    if recovered:
+        return recovered
 
     return []
 
@@ -93,6 +107,157 @@ def _loads_with_repair(candidate: str) -> Any:
         except (json.JSONDecodeError, ValueError):
             return None
     return None
+
+
+# Argument keys whose values are commonly code/multiline and therefore the
+# usual culprits for unescaped quotes and raw newlines.
+_RAW_ARG_KEYS = (
+    "content",
+    "command",
+    "new_string",
+    "old_string",
+    "replace",
+    "search",
+    "patch",
+    "body",
+)
+_SCALAR_ARG_KEYS = ("filePath", "file_path", "path", "pattern", "query", "workdir")
+
+
+def _recover_toolcall_with_raw_args(text: str) -> list[ToolCall]:
+    """Reconstruct a single tool call from output with unescaped raw arguments.
+
+    Strategy: find the function name, then for each known argument key locate
+    its value. Code-like keys are extracted by scanning from the opening quote
+    to the quote that is actually followed by a JSON delimiter, treating the
+    body as a literal (so embedded quotes/newlines are preserved). Scalar keys
+    use a simple non-greedy match.
+    """
+    name_match = re.search(r'"name"\s*:\s*"([A-Za-z0-9_.\-]+)"', text)
+    if not name_match:
+        return []
+    name = name_match.group(1)
+
+    args: dict[str, Any] = {}
+    for key in _RAW_ARG_KEYS:
+        value = _extract_raw_string_value(text, key)
+        if value is not None:
+            args[key] = value
+    for key in _SCALAR_ARG_KEYS:
+        m = re.search(rf'"{re.escape(key)}"\s*:\s*"([^"\n]*)"', text)
+        if m:
+            args[key] = m.group(1)
+
+    if not args:
+        return []
+
+    call_id = ""
+    id_match = re.search(r'"id"\s*:\s*"([^"\n]+)"', text)
+    if id_match:
+        call_id = id_match.group(1)
+
+    return [
+        ToolCall(
+            id=call_id,
+            type="function",
+            function=FunctionCall(name=name, arguments=json.dumps(args)),
+        )
+    ]
+
+
+def _extract_raw_string_value(text: str, key: str) -> str | None:
+    """Extract a string value that may contain unescaped quotes and newlines.
+
+    Finds `"key" :` then the opening quote of the value, and scans forward to
+    the closing quote: the first `"` that is followed (ignoring whitespace) by
+    a `,` or `}` which in turn precedes another key or the object end. Embedded
+    quotes are kept verbatim in the returned (decoded) string.
+    """
+    key_match = re.search(rf'"{re.escape(key)}"\s*:\s*"', text)
+    if not key_match:
+        return None
+    start = key_match.end()  # first char after the opening quote
+
+    i = start
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "\\" and i + 1 < n:
+            i += 2
+            continue
+        if ch == '"':
+            j = i + 1
+            while j < n and text[j] in " \t\r\n":
+                j += 1
+            if j >= n or text[j] in (",", "}"):
+                # Likely the real terminator: a delimiter follows. Accept it
+                # unless what follows the delimiter clearly continues a string
+                # value (heuristic kept simple: a following key or object end).
+                raw = text[start:i]
+                return _decode_loose(raw)
+        i += 1
+    return None
+
+
+def _decode_loose(raw: str) -> str:
+    """Turn a loosely-captured JSON string body into the intended text."""
+    return (
+        raw.replace("\\n", "\n")
+        .replace("\\t", "\t")
+        .replace('\\"', '"')
+        .replace("\\\\", "\\")
+    )
+
+
+_SENTINEL_TOOLCALL = re.compile(r"<<<TOOLCALL:([A-Za-z0-9_.\-]+)>>>(.*?)<<<END>>>", re.DOTALL)
+_SENTINEL_ARG = re.compile(r"<<<ARG:([A-Za-z0-9_.\-]+)>>>\n?")
+
+
+def _parse_sentinel_tool_calls(text: str) -> list[ToolCall]:
+    """Parse the sentinel tool-call protocol.
+
+    Format::
+
+        <<<TOOLCALL:name>>>
+        <<<ARG:key>>>
+        <verbatim value, any characters>
+        <<<ARG:key2>>>
+        <value>
+        <<<END>>>
+
+    Argument bodies are captured literally between markers, so embedded quotes,
+    newlines, and backslashes never break parsing. Each captured value is then
+    JSON-encoded by the bridge when building the tool call.
+    """
+    calls: list[ToolCall] = []
+    for idx, match in enumerate(_SENTINEL_TOOLCALL.finditer(text), start=1):
+        name = match.group(1)
+        body = match.group(2)
+        args = _parse_sentinel_args(body)
+        calls.append(
+            ToolCall(
+                id=f"call_{idx}",
+                type="function",
+                function=FunctionCall(name=name, arguments=json.dumps(args)),
+            )
+        )
+    return calls
+
+
+def _parse_sentinel_args(body: str) -> dict[str, Any]:
+    """Split a sentinel body into {arg_name: verbatim_value}."""
+    args: dict[str, Any] = {}
+    markers = list(_SENTINEL_ARG.finditer(body))
+    for i, m in enumerate(markers):
+        key = m.group(1)
+        value_start = m.end()
+        value_end = markers[i + 1].start() if i + 1 < len(markers) else len(body)
+        value = body[value_start:value_end]
+        # Trim a single leading/trailing newline introduced by the layout,
+        # but preserve interior whitespace and intentional blank lines.
+        value = value.strip("\n")
+        args[key] = value
+    return args
 
 
 def _parse_xml_tool_calls(text: str) -> list[ToolCall]:

@@ -9,11 +9,27 @@ from typing import Any
 
 import httpx
 
+# Sentinel-based tool-call protocol. Browser models frequently break JSON when
+# an argument contains code (unescaped quotes, raw newlines). Instead of asking
+# them to escape JSON (which they get wrong), we ask them to wrap each argument
+# value in delimiter blocks whose body is taken verbatim. The bridge parses by
+# delimiter, so the body can contain anything without breaking the parse.
 TOOL_CALL_SYSTEM_PROMPT = (
-    'You have access to tools. When you need to use a tool, '
-    'respond with a JSON object: {{"tool_calls": [{{"id": "call_1", '
-    '"type": "function", "function": {{"name": "tool_name", '
-    '"arguments": {{"arg1": "value1"}}}}}}]}}\n\n'
+    "You have access to tools. To call a tool, output EXACTLY this format and "
+    "nothing else:\n\n"
+    "<<<TOOLCALL:tool_name>>>\n"
+    "<<<ARG:first_arg_name>>>\n"
+    "the value for that argument, on its own lines, written verbatim\n"
+    "<<<ARG:second_arg_name>>>\n"
+    "another value\n"
+    "<<<END>>>\n\n"
+    "Rules for this format:\n"
+    "- Do NOT escape anything inside an argument value. Write code exactly as "
+    "it should appear on disk: real newlines, real quotes, real backslashes.\n"
+    "- Put each argument value on the line(s) after its <<<ARG:name>>> marker.\n"
+    "- Close every tool call with <<<END>>> on its own line.\n"
+    "- To call multiple tools, output multiple <<<TOOLCALL:...>>> ... <<<END>>> "
+    "blocks back to back.\n\n"
     "Available tools:\n{tools_desc}\n\n"
     "If you do not need a tool, respond normally with plain text."
 )
