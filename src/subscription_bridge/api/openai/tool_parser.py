@@ -39,6 +39,13 @@ def parse_tool_calls(text: str) -> list[ToolCall]:
         if result:
             return result
 
+    # 3. Last resort: the model emitted a tool call whose argument string holds
+    #    raw, unescaped code (unescaped quotes / literal newlines), which no
+    #    JSON parser can load. Reconstruct it structurally from the key anchors.
+    recovered = _recover_toolcall_with_raw_args(text)
+    if recovered:
+        return recovered
+
     return []
 
 
@@ -93,6 +100,106 @@ def _loads_with_repair(candidate: str) -> Any:
         except (json.JSONDecodeError, ValueError):
             return None
     return None
+
+
+# Argument keys whose values are commonly code/multiline and therefore the
+# usual culprits for unescaped quotes and raw newlines.
+_RAW_ARG_KEYS = (
+    "content",
+    "command",
+    "new_string",
+    "old_string",
+    "replace",
+    "search",
+    "patch",
+    "body",
+)
+_SCALAR_ARG_KEYS = ("filePath", "file_path", "path", "pattern", "query", "workdir")
+
+
+def _recover_toolcall_with_raw_args(text: str) -> list[ToolCall]:
+    """Reconstruct a single tool call from output with unescaped raw arguments.
+
+    Strategy: find the function name, then for each known argument key locate
+    its value. Code-like keys are extracted by scanning from the opening quote
+    to the quote that is actually followed by a JSON delimiter, treating the
+    body as a literal (so embedded quotes/newlines are preserved). Scalar keys
+    use a simple non-greedy match.
+    """
+    name_match = re.search(r'"name"\s*:\s*"([A-Za-z0-9_.\-]+)"', text)
+    if not name_match:
+        return []
+    name = name_match.group(1)
+
+    args: dict[str, Any] = {}
+    for key in _RAW_ARG_KEYS:
+        value = _extract_raw_string_value(text, key)
+        if value is not None:
+            args[key] = value
+    for key in _SCALAR_ARG_KEYS:
+        m = re.search(rf'"{re.escape(key)}"\s*:\s*"([^"\n]*)"', text)
+        if m:
+            args[key] = m.group(1)
+
+    if not args:
+        return []
+
+    call_id = ""
+    id_match = re.search(r'"id"\s*:\s*"([^"\n]+)"', text)
+    if id_match:
+        call_id = id_match.group(1)
+
+    return [
+        ToolCall(
+            id=call_id,
+            type="function",
+            function=FunctionCall(name=name, arguments=json.dumps(args)),
+        )
+    ]
+
+
+def _extract_raw_string_value(text: str, key: str) -> str | None:
+    """Extract a string value that may contain unescaped quotes and newlines.
+
+    Finds `"key" :` then the opening quote of the value, and scans forward to
+    the closing quote: the first `"` that is followed (ignoring whitespace) by
+    a `,` or `}` which in turn precedes another key or the object end. Embedded
+    quotes are kept verbatim in the returned (decoded) string.
+    """
+    key_match = re.search(rf'"{re.escape(key)}"\s*:\s*"', text)
+    if not key_match:
+        return None
+    start = key_match.end()  # first char after the opening quote
+
+    i = start
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "\\" and i + 1 < n:
+            i += 2
+            continue
+        if ch == '"':
+            j = i + 1
+            while j < n and text[j] in " \t\r\n":
+                j += 1
+            if j >= n or text[j] in (",", "}"):
+                # Likely the real terminator: a delimiter follows. Accept it
+                # unless what follows the delimiter clearly continues a string
+                # value (heuristic kept simple: a following key or object end).
+                raw = text[start:i]
+                return _decode_loose(raw)
+        i += 1
+    return None
+
+
+def _decode_loose(raw: str) -> str:
+    """Turn a loosely-captured JSON string body into the intended text."""
+    return (
+        raw.replace("\\n", "\n")
+        .replace("\\t", "\t")
+        .replace('\\"', '"')
+        .replace("\\\\", "\\")
+    )
 
 
 def _parse_xml_tool_calls(text: str) -> list[ToolCall]:
