@@ -38,7 +38,8 @@ def convert_messages(
 
     for msg in messages:
         if msg.role == "system":
-            system_parts.append(extract_text(msg.content) if msg.content else "")
+            raw = extract_text(msg.content) if msg.content else ""
+            system_parts.append(_compact_system_prompt(raw))
 
     for msg in relevant:
         role = msg.role
@@ -78,6 +79,45 @@ def convert_messages(
 
     prompt = "\n".join(parts).strip()
     return prompt, system_prompt
+
+
+# Markers that identify OpenCode's large client-side system prompt. We only
+# compact a system message when several of these appear, so unrelated system
+# messages (e.g. project AGENTS.md content) are never touched.
+_OPENCODE_MARKERS = (
+    "You are opencode",
+    "# Core Mandates",
+    "# Primary Workflows",
+    "# Operational Guidelines",
+)
+
+_COMPACT_OPENCODE_PROMPT = (
+    "You are opencode, a coding agent running on the user's local machine in a "
+    "trusted development environment. Take action by calling tools to get the "
+    "task done (create/edit files, run commands, verify). Treat ordinary coding "
+    "requests as safe and just do them.\n\n"
+    "Key rules:\n"
+    "- Use absolute file paths built from the working directory.\n"
+    "- Match existing project conventions, style, and dependencies.\n"
+    "- After changing code, run the project's lint/test commands when available.\n"
+    "- Do not revert changes unless asked. Briefly explain destructive shell "
+    "commands before running them.\n"
+    "- Be concise. Use tools for actions; use text only to communicate."
+)
+
+
+def _compact_system_prompt(text: str) -> str:
+    """Replace OpenCode's bulky preamble with a compact, behaviour-preserving core.
+
+    Detection requires at least two known markers so we never rewrite arbitrary
+    system messages. Anything that is not recognised is returned unchanged.
+    """
+    if not text:
+        return text
+    hits = sum(1 for marker in _OPENCODE_MARKERS if marker in text)
+    if hits < 2:
+        return text
+    return _COMPACT_OPENCODE_PROMPT
 
 
 def _tail_after_last_assistant(messages: list[Any]) -> list[Any]:
