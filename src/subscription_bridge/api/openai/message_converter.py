@@ -111,13 +111,38 @@ def _compact_system_prompt(text: str) -> str:
 
     Detection requires at least two known markers so we never rewrite arbitrary
     system messages. Anything that is not recognised is returned unchanged.
+
+    The available-skills list is preserved: the model can load skills via the
+    local `skill` tool, so it must still see which skills exist.
     """
     if not text:
         return text
     hits = sum(1 for marker in _OPENCODE_MARKERS if marker in text)
     if hits < 2:
         return text
-    return _COMPACT_OPENCODE_PROMPT
+
+    parts = [_COMPACT_OPENCODE_PROMPT]
+    skills = _extract_skills_section(text)
+    if skills:
+        parts.append(skills)
+    return "\n\n".join(parts)
+
+
+def _extract_skills_section(text: str) -> str:
+    """Pull the skills list out of OpenCode's prompt so it survives compaction.
+
+    Returns the <available_skills>...</available_skills> block, prefixed with a
+    short reminder on how to load a skill. Empty string if no skills block.
+    """
+    match = re.search(r"<available_skills>.*?</available_skills>", text, re.DOTALL)
+    if not match:
+        return ""
+    block = match.group(0).strip()
+    reminder = (
+        "Skills provide specialized instructions for specific tasks. Load a "
+        "skill with the `skill` tool when a task matches its description."
+    )
+    return f"{reminder}\n{block}"
 
 
 def _tail_after_last_assistant(messages: list[Any]) -> list[Any]:
