@@ -46,10 +46,6 @@ def convert_messages(
     system_parts: list[str] = []
     conversation: list[str] = []
 
-    # If the transcript already contains an assistant turn, the browser chat is
-    # a continuation: earlier turns are already in its history. Only send the
-    # turns after the last assistant message to avoid re-sending the whole
-    # transcript (and the heavy preamble) on every step.
     relevant = _tail_after_last_assistant(messages)
 
     for msg in messages:
@@ -59,8 +55,7 @@ def convert_messages(
 
     for msg in relevant:
         role = msg.role
-        content = msg.content
-        text = extract_text(content) if content else ""
+        text = extract_text(msg.content) if msg.content else ""
 
         if role == "system":
             continue
@@ -69,16 +64,13 @@ def convert_messages(
         elif role == "assistant":
             if msg.tool_calls:
                 for tc in msg.tool_calls or []:
-                    fn = tc.get("function", tc) if isinstance(tc, dict) else {}
-                    name = fn.get("name", "?") if isinstance(fn, dict) else "?"
-                    args = fn.get("arguments", "{}") if isinstance(fn, dict) else "{}"
+                    name = tc.get("function", {}).get("name", "?") if isinstance(tc, dict) else "?"
+                    args = tc.get("function", {}).get("arguments", "{}") if isinstance(tc, dict) else "{}"
                     conversation.append(f"Assistant (tool call): {name}({args})")
             if text:
                 conversation.append(f"Assistant: {text}")
         elif role == "tool":
-            name = ""
-            if hasattr(msg, "tool_call_id") and msg.tool_call_id:
-                name = f" (call: {msg.tool_call_id})"
+            name = f" (call: {msg.tool_call_id})" if hasattr(msg, "tool_call_id") and msg.tool_call_id else ""
             conversation.append(f"Tool result{name}: {text[:1000]}")
 
     if tools and require_json_tools:
@@ -87,13 +79,7 @@ def convert_messages(
 
     system_prompt = "\n".join(system_parts) if system_parts else ""
 
-    parts: list[str] = []
-    if conversation:
-        parts.append("Conversation:")
-        parts.extend(conversation)
-        parts.append("")
-
-    prompt = "\n".join(parts).strip()
+    prompt = "\n".join(["Conversation:", *conversation]) if conversation else ""
     return prompt, system_prompt
 
 
@@ -123,14 +109,6 @@ _COMPACT_OPENCODE_PROMPT = (
 
 
 def _compact_system_prompt(text: str) -> str:
-    """Replace OpenCode's bulky preamble with a compact, behaviour-preserving core.
-
-    Detection requires at least two known markers so we never rewrite arbitrary
-    system messages. Anything that is not recognised is returned unchanged.
-
-    The available-skills list is preserved: the model can load skills via the
-    local `skill` tool, so it must still see which skills exist.
-    """
     if not text:
         return text
     hits = sum(1 for marker in _OPENCODE_MARKERS if marker in text)
@@ -145,11 +123,6 @@ def _compact_system_prompt(text: str) -> str:
 
 
 def _extract_skills_section(text: str) -> str:
-    """Pull the skills list out of OpenCode's prompt so it survives compaction.
-
-    Returns the <available_skills>...</available_skills> block, prefixed with a
-    short reminder on how to load a skill. Empty string if no skills block.
-    """
     match = re.search(r"<available_skills>.*?</available_skills>", text, re.DOTALL)
     if not match:
         return ""

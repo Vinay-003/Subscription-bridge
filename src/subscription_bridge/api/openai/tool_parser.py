@@ -57,30 +57,17 @@ def parse_tool_calls(text: str) -> list[ToolCall]:
 
 
 def _json_candidates(text: str) -> list[str]:
-    """Build an ordered, de-duplicated list of strings worth attempting."""
-    candidates: list[str] = []
-
-    # Each fenced code block, in order of appearance.
-    candidates.extend(_code_block_contents(text))
-
-    # The first balanced {...} object embedded anywhere in the text.
-    candidates.append(extract_first_json(text))
-
-    # Fences stripped, then the full repair pipeline.
-    candidates.append(strip_code_fences(text))
-    candidates.append(repair_json(text))
-
-    # The raw text last.
-    candidates.append(text)
-
-    seen: set[str] = set()
-    unique: list[str] = []
-    for c in candidates:
-        s = (c or "").strip()
-        if s and s not in seen:
-            seen.add(s)
-            unique.append(s)
-    return unique
+    seen = set()
+    return [
+        c for c in [
+            *_code_block_contents(text),
+            extract_first_json(text),
+            strip_code_fences(text),
+            repair_json(text),
+            text,
+        ]
+        if (s := (c or "").strip()) and s not in seen and seen.add(s)
+    ]
 
 
 def _code_block_contents(text: str) -> list[str]:
@@ -271,27 +258,15 @@ def _parse_xml_tool_calls(text: str) -> list[ToolCall]:
 
 
 def _tool_calls_from_json_value(data: Any) -> list[ToolCall]:
-    # {"tool_calls": [...]}
     if isinstance(data, dict) and "tool_calls" in data:
         raw = data["tool_calls"]
-        raw_list = list(raw) if isinstance(raw, list) else []
-        return [
-            _to_tool_call(_ensure_function_wrapper(tc))
-            for tc in raw_list
-            if isinstance(tc, dict)
-        ]
-    # Bare list of calls.
+        if isinstance(raw, list):
+            return [_to_tool_call(_ensure_function_wrapper(tc)) for tc in raw if isinstance(tc, dict)]
     if isinstance(data, list):
-        return [
-            _to_tool_call(_ensure_function_wrapper(tc))
-            for tc in data
-            if isinstance(tc, dict)
-        ]
+        return [_to_tool_call(_ensure_function_wrapper(tc)) for tc in data if isinstance(tc, dict)]
     if isinstance(data, dict):
-        # {"name": ..., "arguments": ...} or {"function": {...}}
         if "name" in data or "function" in data:
             return [_to_tool_call(_ensure_function_wrapper(data))]
-        # LangChain-style {"action": "tool", "action_input": {...}}
         if "action" in data and isinstance(data["action"], str):
             return [_to_tool_call(_ensure_function_wrapper(_from_action_format(data)))]
     return []
@@ -307,15 +282,14 @@ def _from_action_format(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def _to_tool_call(data: dict[str, Any]) -> ToolCall:
-    fn = data.get("function", {})
-    if isinstance(fn, dict):
-        args = fn.get("arguments", "{}")
+    if isinstance(data.get("function"), dict):
+        args = data["function"].get("arguments", "{}")
         if not isinstance(args, str):
             args = json.dumps(args)
         return ToolCall(
             id=data.get("id", ""),
             type=data.get("type", "function"),
-            function=FunctionCall(name=fn.get("name", ""), arguments=args),
+            function=FunctionCall(name=data["function"].get("name", ""), arguments=args),
         )
     return ToolCall(
         id=data.get("id", ""),
@@ -335,9 +309,6 @@ def _ensure_function_wrapper(data: dict[str, Any]) -> dict[str, Any]:
         return {
             "id": data.get("id", ""),
             "type": "function",
-            "function": {
-                "name": data["name"],
-                "arguments": args,
-            },
+            "function": {"name": data["name"], "arguments": args},
         }
     return data
