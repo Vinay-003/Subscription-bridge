@@ -63,6 +63,11 @@ class SessionPool:
                 ok = await idle.ensure_alive()
                 if ok:
                     await idle.operation_lock.acquire()
+                    if idle.owner_run_id != run_id:
+                        # A different conversation is taking over this tab. Its
+                        # provider-side chat history must be reset by the adapter.
+                        idle.has_active_conversation = False
+                        idle.selected_model_variant = None
                     idle.mark_busy(run_id, replace_owner=True)
                     return idle
                 self._sessions.pop(idle.session_id, None)

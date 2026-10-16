@@ -154,8 +154,10 @@ class PlaywrightManager:
             "claude": ("claude.ai",),
         }.get((provider_name or "").lower(), ())
 
+        browser_config = self._config.get("browser", {})
+        reuse_open_tab = bool(browser_config.get("reuse_open_tab", True))
         # Reuse an exact provider tab first, but never hand one tab to two sessions.
-        if self._mode == "cdp" and host_needles:
+        if self._mode == "cdp" and reuse_open_tab and host_needles:
             for page in pages:
                 if id(page) in self._claimed_pages:
                     continue
@@ -165,7 +167,23 @@ class PlaywrightManager:
                     url = ""
                 if any(host in url for host in host_needles):
                     self._claimed_pages.add(id(page))
+                    try:
+                        if not bool(browser_config.get("headless", False)):
+                            await page.bring_to_front()
+                    except Exception:
+                        pass
                     return page
+
+        if self._mode == "cdp" and reuse_open_tab:
+            for page in pages:
+                if id(page) in self._claimed_pages:
+                    continue
+                try:
+                    if not page.url or page.url == "about:blank" or page.url.startswith("chrome://newtab"):
+                        self._claimed_pages.add(id(page))
+                        return page
+                except Exception:
+                    continue
 
         # For managed mode, let the first session claim the initial blank tab.
         if self._mode == "managed":
@@ -186,18 +204,24 @@ class PlaywrightManager:
 
     async def stop(self) -> None:
         if self._context is not None:
-            try:
-                await self._context.close()
-            except Exception:
-                pass
-            self._context = None
+            if self._mode == "cdp":
+                # CDP contexts belong to the user's Chrome process. Disconnecting
+                # must not close their tabs or browser context.
+                self._context = None
+            else:
+                try:
+                    await self._context.close()
+                except Exception:
+                    pass
+                self._context = None
         self._claimed_pages.clear()
 
         if self._browser is not None:
-            try:
-                await self._browser.close()
-            except Exception:
-                pass
+            if self._mode != "cdp":
+                try:
+                    await self._browser.close()
+                except Exception:
+                    pass
             self._browser = None
 
         if self._playwright is not None:
