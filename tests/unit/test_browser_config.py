@@ -19,8 +19,10 @@ def test_browser_config_default_cdp_url() -> None:
     browser = config.get("browser", {})
     cdp_url = browser.get("cdp_url", "")
     assert "127.0.0.1" in cdp_url
-    assert "9333" in cdp_url
+    # Custom non-default port (avoid common Chrome debug ports)
+    assert "9555" in cdp_url
     assert "9222" not in cdp_url
+    assert "9333" not in cdp_url
 
 
 def test_browser_config_max_sessions() -> None:

@@ -483,7 +483,20 @@ def test_v1_streaming_with_tools_parses_tool_calls(client: TestClient) -> None:
 # ── Phase 9: Health endpoint enrichment ─────────────────────────────────────
 
 
-def test_health_includes_models_and_tool_count(client: TestClient) -> None:
+def test_health_includes_models_and_tool_count(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Mock provider health so the unit test does not touch a live browser/CDP.
+    async def fake_healths(self: object) -> dict[str, str]:
+        return {"fake": "ready", "gemini": "ready", "chatgpt": "ready"}
+
+    from subscription_bridge.api import dependencies
+
+    monkeypatch.setattr(
+        dependencies.AppDependencies,
+        "get_provider_healths",
+        fake_healths,
+    )
     response = client.get("/health")
     assert response.status_code == 200
     data = response.json()

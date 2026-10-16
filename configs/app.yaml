@@ -15,7 +15,7 @@ app:
 browser:
   mode: cdp
   reuse_open_tab: true
-  cdp_url: "http://127.0.0.1:9333"
+  cdp_url: "http://127.0.0.1:9555"
   headless: false
   user_data_dir: "~/.subscription-bridge/chrome-profile"
   downloads_dir: "~/.subscription-bridge/downloads"

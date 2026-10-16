@@ -420,18 +420,34 @@ async def _wait_for_response_complete(
 async def _extract_latest_assistant_text(page: Any, pre_send_count: int = 0) -> str:
     script = r"""
     () => {
-        const elements = Array.from(document.querySelectorAll(
-            '[data-message-author-role="assistant"]'
-        ));
-        const visible = elements.filter(el => {
-            const r = el.getBoundingClientRect();
-            const s = getComputedStyle(el);
-            return r.width > 0 && r.height > 0 &&
-                   s.display !== 'none' && s.visibility !== 'hidden';
-        });
-        if (!visible.length) return '';
-        const lastEl = visible[visible.length - 1];
-        return lastEl.innerText || lastEl.textContent || '';
+        // Prefer content-bearing selectors. data-conversation-role="assistant"
+        // wraps the whole turn including the "ChatGPT said:" label; dig into
+        // nested markdown when that is the only match.
+        const selectors = [
+            '[data-markdown-text-style="assistant-message"]',
+            '[class*="DilResponseRoot"]',
+            '[data-message-author-role="assistant"]',
+            '[data-conversation-role="assistant"]',
+        ];
+        for (const sel of selectors) {
+            const elements = Array.from(document.querySelectorAll(sel));
+            const visible = elements.filter(el => {
+                const r = el.getBoundingClientRect();
+                const s = getComputedStyle(el);
+                return r.width > 0 && r.height > 0 &&
+                       s.display !== 'none' && s.visibility !== 'hidden';
+            });
+            if (!visible.length) continue;
+            const lastEl = visible[visible.length - 1];
+            // Prefer nested markdown content inside a conversation-role wrapper
+            const nested = lastEl.querySelector(
+                '[data-markdown-text-style="assistant-message"], [class*="DilResponseRoot"], .markdown, .prose'
+            );
+            const source = nested || lastEl;
+            const text = (source.innerText || source.textContent || '').trim();
+            if (text) return text;
+        }
+        return '';
     }
     """
     try:
@@ -441,7 +457,7 @@ async def _extract_latest_assistant_text(page: Any, pre_send_count: int = 0) -> 
     except Exception:
         pass
 
-    for selector in [".markdown", ".prose"]:
+    for selector in [".markdown", ".prose", '[class*="MarkdownRoot"]']:
         try:
             text = await page.evaluate(
                 r"""
@@ -522,12 +538,30 @@ async def _submission_activity_report(page: Any) -> dict[str, Any]:
         )) {
             if (visible(el)) { progressVisible = true; break; }
         }
-        const assistantEls = Array.from(
-            document.querySelectorAll('[data-message-author-role="assistant"]')
-        ).filter(visible);
-        const stopButton = document.querySelector('button[data-testid="stop-button"]');
+        // New ChatGPT UI: assistant messages use data-conversation-role or
+        // data-markdown-text-style. Legacy UI used data-message-author-role.
+        const assistantSelectors = [
+            '[data-conversation-role="assistant"]',
+            '[data-markdown-text-style="assistant-message"]',
+            '[class*="DilResponseRoot"]',
+            '[data-message-author-role="assistant"]',
+        ];
+        let assistantEls = [];
+        for (const sel of assistantSelectors) {
+            assistantEls = Array.from(document.querySelectorAll(sel)).filter(visible);
+            if (assistantEls.length) break;
+        }
+        // Turn-state: complete means generation finished
+        const incompleteTurns = Array.from(document.querySelectorAll(
+            '[data-talvt-turn-state="generating"],' +
+            ' [data-talvt-turn-state="thinking"],' +
+            ' [data-talvt-turn-state="streaming"]'
+        )).filter(visible);
+        const stopButton = document.querySelector(
+            'button[data-testid="stop-button"], button[aria-label*="Stop"], button[aria-label*="stop"]'
+        );
         return {
-            stopVisible: stopVisible || visible(stopButton),
+            stopVisible: stopVisible || visible(stopButton) || incompleteTurns.length > 0,
             thinkingVisible,
             progressVisible,
             assistantCount: assistantEls.length,
