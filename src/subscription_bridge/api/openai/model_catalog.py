@@ -49,17 +49,15 @@ DEFAULT_MODEL_OUTPUT_LIMITS: dict[str, int] = {
 
 
 def build_models() -> list[OpenAIModel]:
-    tool_defs = build_native_tool_definitions()
+    """Return an OpenAI-compatible model catalog without bridge-native tools.
+
+    Tool definitions belong on each chat-completions request; OpenCode owns its
+    tool registry and execution loop. Native bridge routes keep their own tools.
+    """
     config_models = _configured_models()
     if config_models:
-        return [
-            OpenAIModel(id=model_id, owned_by="subscription-bridge", tools=tool_defs)
-            for model_id in config_models
-        ]
-    return [
-        OpenAIModel(id=model_id, owned_by="subscription-bridge", tools=tool_defs)
-        for model_id in _default_model_ids()
-    ]
+        return [OpenAIModel(id=model_id, owned_by="subscription-bridge") for model_id in config_models]
+    return [OpenAIModel(id=model_id, owned_by="subscription-bridge") for model_id in _default_model_ids()]
 
 
 def build_native_tool_definitions() -> list[dict[str, Any]]:

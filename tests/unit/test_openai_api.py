@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import pytest
 from fastapi.testclient import TestClient
 
@@ -341,7 +342,7 @@ def test_v1_tools_returns_openai_tool_calls(monkeypatch: pytest.MonkeyPatch, cli
     choice = data["choices"][0]
     assert choice["finish_reason"] == "tool_calls"
     assert choice["message"]["content"] is None
-    assert choice["message"]["tool_calls"][0]["id"] == "call_1"
+    assert choice["message"]["tool_calls"][0]["id"].startswith("call_")
     assert choice["message"]["tool_calls"][0]["function"]["name"] == "file_read"
 
 
@@ -397,31 +398,13 @@ def test_v1_tools_does_not_start_hidden_agent(monkeypatch: pytest.MonkeyPatch, c
 # ── Phase 9: Model catalog tool definitions ─────────────────────────────────
 
 
-def test_v1_models_includes_tool_definitions(client: TestClient) -> None:
+def test_v1_models_does_not_advertise_bridge_native_tools(client: TestClient) -> None:
     response = client.get("/v1/models")
     assert response.status_code == 200
     data = response.json()
     fake_model = next(m for m in data["data"] if m["id"] == "subscription-bridge-fake")
-    assert fake_model["tools"] is not None
-    assert len(fake_model["tools"]) >= 5
-    tool_names = [t["function"]["name"] for t in fake_model["tools"]]
-    assert "file_read" in tool_names
-    assert "file_write" in tool_names
-    assert "bash" in tool_names
-    assert "grep" in tool_names
-    assert "patch" in tool_names
+    assert "tools" not in fake_model
 
-
-def test_v1_models_tool_definitions_have_schemas(client: TestClient) -> None:
-    response = client.get("/v1/models")
-    data = response.json()
-    fake_model = next(m for m in data["data"] if m["id"] == "subscription-bridge-fake")
-    for tool_def in fake_model["tools"]:
-        assert tool_def["type"] == "function"
-        assert "function" in tool_def
-        assert "name" in tool_def["function"]
-        assert "description" in tool_def["function"]
-        assert "parameters" in tool_def["function"]
 
 
 def test_build_native_tool_definitions_all_have_parameters() -> None:
@@ -510,3 +493,78 @@ def test_health_includes_models_and_tool_count(client: TestClient) -> None:
     assert "subscription-bridge-fake" in data["models"]
     assert data["tool_count"] >= 5
     assert data["native_agent"] is True
+
+
+
+def test_openai_gateway_tool_loop_preserves_session_and_returns_to_opencode(
+    monkeypatch: pytest.MonkeyPatch, client: TestClient,
+) -> None:
+    from subscription_bridge.providers.base import ProviderRequest, ProviderResponse
+
+    seen: list[ProviderRequest] = []
+
+    class ScriptedBrowserProvider:
+        name = "gemini"
+
+        async def send_prompt(self, request: ProviderRequest) -> ProviderResponse:
+            seen.append(request)
+            if len(seen) == 1:
+                text = '<<<TOOLCALL:file_read>>>\n<<<ARG:path>>>\nREADME.md\n<<<END>>>'
+            else:
+                text = "Read result acknowledged."
+            return ProviderResponse(
+                provider=self.name, text=text, raw_text=text, success=True, latency_seconds=0.0,
+            )
+
+    async def resolve_adapter(model_id: str, deps: object) -> ScriptedBrowserProvider:
+        return ScriptedBrowserProvider()
+
+    monkeypatch.setattr("subscription_bridge.api.openai_compat._resolve_adapter", resolve_adapter)
+
+    headers = {"x-opencode-session": "open-code-test-session"}
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "file_read",
+            "description": "Read a file from the workspace",
+            "parameters": {
+                "type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"],
+            },
+        },
+    }
+    initial = [
+        {"role": "system", "content": "Keep the complete OpenCode system instructions."},
+        {"role": "user", "content": "Inspect README.md and summarize it."},
+    ]
+
+    first = client.post(
+        "/v1/chat/completions",
+        headers=headers,
+        json={"model": "subscription-bridge-gemini-fast", "messages": initial, "tools": [tool]},
+    )
+    assert first.status_code == 200
+    first_choice = first.json()["choices"][0]
+    assert first_choice["finish_reason"] == "tool_calls"
+    call = first_choice["message"]["tool_calls"][0]
+    assert call["function"]["name"] == "file_read"
+    assert json.loads(call["function"]["arguments"]) == {"path": "README.md"}
+
+    second = client.post(
+        "/v1/chat/completions",
+        headers=headers,
+        json={
+            "model": "subscription-bridge-gemini-fast",
+            "messages": initial + [
+                {"role": "assistant", "content": None, "tool_calls": [call]},
+                {"role": "tool", "tool_call_id": call["id"], "content": "README contents"},
+            ],
+            "tools": [tool],
+        },
+    )
+    assert second.status_code == 200
+    assert second.json()["choices"][0]["message"]["content"] == "Read result acknowledged."
+    assert len(seen) == 2
+    assert seen[0].run_id == seen[1].run_id
+    assert seen[0].metadata["isolated_conversation"] is True
+    assert "README contents" in seen[1].prompt
+    assert "Inspect README.md" not in seen[1].prompt  # prior context is already in the same browser chat

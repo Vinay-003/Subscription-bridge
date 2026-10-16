@@ -12,7 +12,7 @@ from subscription_bridge.parsing.repair import (
 )
 
 
-def parse_tool_calls(text: str) -> list[ToolCall]:
+def _parse_tool_calls_unvalidated(text: str) -> list[ToolCall]:
     """Parse tool calls out of unreliable browser-LLM output.
 
     Browser models rarely emit a clean OpenAI tool-call object: they wrap JSON
@@ -56,18 +56,168 @@ def parse_tool_calls(text: str) -> list[ToolCall]:
     return []
 
 
+
+def parse_tool_calls(
+    text: str,
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: str | dict[str, Any] | None = None,
+) -> list[ToolCall]:
+    """Parse browser text into only the tool calls allowed by this API request."""
+    if tool_choice == "none":
+        return []
+    raw_calls = _parse_tool_calls_unvalidated(text)
+    if not raw_calls:
+        return []
+
+    schemas: dict[str, dict[str, Any]] = {}
+    if tools:
+        for tool in tools:
+            function = tool.get("function", tool) if isinstance(tool, dict) else {}
+            if isinstance(function, dict) and isinstance(function.get("name"), str):
+                parameters = function.get("parameters", {})
+                schemas[function["name"]] = parameters if isinstance(parameters, dict) else {}
+
+    forced_name: str | None = None
+    if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
+        function = tool_choice.get("function", {})
+        if isinstance(function, dict) and isinstance(function.get("name"), str):
+            forced_name = function["name"]
+
+    result: list[ToolCall] = []
+    for call in raw_calls:
+        name = call.function.name
+        if schemas and name not in schemas:
+            continue
+        if forced_name and name != forced_name:
+            continue
+        if schemas:
+            try:
+                args = json.loads(call.function.arguments or "{}")
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if not isinstance(args, dict):
+                continue
+            coerced = _coerce_arguments(args, schemas.get(name, {}))
+            if coerced is None:
+                continue
+            call.function.arguments = json.dumps(coerced, ensure_ascii=False, separators=(",", ":"))
+        result.append(call)
+
+    seen: set[str] = set()
+    for index, call in enumerate(result, start=1):
+        if not call.id or call.id in seen:
+            import uuid
+            call.id = f"call_{uuid.uuid4().hex[:20]}"
+        seen.add(call.id)
+    return result
+
+
+def _coerce_arguments(arguments: dict[str, Any], schema: dict[str, Any]) -> dict[str, Any] | None:
+    """Validate/coerce arguments recursively against the request's JSON schema."""
+    properties = schema.get("properties", {})
+    if not isinstance(properties, dict):
+        properties = {}
+    result: dict[str, Any] = {}
+    for key, value in arguments.items():
+        prop = properties.get(key)
+        if not isinstance(prop, dict):
+            result[key] = value
+            continue
+        ok, normalized = _coerce_schema_value(value, prop)
+        if not ok:
+            return None
+        result[key] = normalized
+    required = schema.get("required", [])
+    if isinstance(required, list) and any(key not in result for key in required):
+        return None
+    return result
+
+
+def _coerce_schema_value(value: Any, schema: dict[str, Any]) -> tuple[bool, Any]:
+    expected = schema.get("type")
+    if isinstance(expected, list):
+        allowed = expected
+        if value is None and "null" in allowed:
+            expected = "null"
+        else:
+            expected = next((item for item in allowed if item != "null"), None)
+
+    # Sentinel argument bodies are strings; decode non-string schema types.
+    if isinstance(value, str):
+        try:
+            if expected in ("object", "array"):
+                value = json.loads(value)
+            elif expected == "boolean":
+                normalized = value.strip().lower()
+                if normalized not in ("true", "false"):
+                    return False, None
+                value = normalized == "true"
+            elif expected == "integer":
+                value = int(value.strip())
+            elif expected == "number":
+                value = float(value.strip())
+            elif expected == "null" and value.strip().lower() == "null":
+                value = None
+        except (ValueError, TypeError, json.JSONDecodeError):
+            return False, None
+
+    if expected == "string":
+        if not isinstance(value, str):
+            return False, None
+    elif expected == "boolean":
+        if not isinstance(value, bool):
+            return False, None
+    elif expected == "integer":
+        if isinstance(value, bool) or not isinstance(value, int):
+            return False, None
+    elif expected == "number":
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return False, None
+    elif expected == "object":
+        if not isinstance(value, dict):
+            return False, None
+        nested = _coerce_arguments(value, schema)
+        if nested is None:
+            return False, None
+        value = nested
+    elif expected == "array":
+        if not isinstance(value, list):
+            return False, None
+        items_schema = schema.get("items")
+        if isinstance(items_schema, dict):
+            normalized_items: list[Any] = []
+            for item in value:
+                ok, normalized = _coerce_schema_value(item, items_schema)
+                if not ok:
+                    return False, None
+                normalized_items.append(normalized)
+            value = normalized_items
+    elif expected == "null":
+        if value is not None:
+            return False, None
+
+    enum_values = schema.get("enum")
+    if isinstance(enum_values, list) and value not in enum_values:
+        return False, None
+    return True, value
+
 def _json_candidates(text: str) -> list[str]:
-    seen = set()
-    return [
-        c for c in [
-            *_code_block_contents(text),
-            extract_first_json(text),
-            strip_code_fences(text),
-            repair_json(text),
-            text,
-        ]
-        if (s := (c or "").strip()) and s not in seen and seen.add(s)
-    ]
+    """Return unique non-empty JSON candidates in preferred parsing order."""
+    seen: set[str] = set()
+    candidates: list[str] = []
+    for candidate in (
+        *_code_block_contents(text),
+        extract_first_json(text),
+        strip_code_fences(text),
+        repair_json(text),
+        text,
+    ):
+        normalized = (candidate or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        candidates.append(normalized)
+    return candidates
 
 
 def _code_block_contents(text: str) -> list[str]:
@@ -240,9 +390,10 @@ def _parse_sentinel_args(body: str) -> dict[str, Any]:
         value_start = m.end()
         value_end = markers[i + 1].start() if i + 1 < len(markers) else len(body)
         value = body[value_start:value_end]
-        # Trim a single leading/trailing newline introduced by the layout,
-        # but preserve interior whitespace and intentional blank lines.
-        value = value.strip("\n")
+        # The regex consumes the protocol newline after each marker. Preserve all
+        # remaining leading whitespace as intentional argument content.
+        if value.endswith("\n"):
+            value = value[:-1]
         args[key] = value
     return args
 

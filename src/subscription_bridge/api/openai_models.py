@@ -44,7 +44,6 @@ class OpenAIModel(BaseModel):
     object: str = "model"
     created: int = 0
     owned_by: str = "subscription-bridge"
-    tools: list[dict[str, Any]] | None = None
 
 
 class ModelList(BaseModel):

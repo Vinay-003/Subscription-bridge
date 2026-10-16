@@ -17,21 +17,25 @@ async def stream_response(
     request: ProviderRequest,
     model: str,
     has_tools: bool = False,
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: str | dict[str, Any] | None = None,
 ) -> AsyncGenerator[str, None]:
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     now = int(time.time())
 
-    yield _completion_chunk(completion_id, now, model, role="assistant")
-
     response = await adapter.send_prompt(request)
 
     if not response.success:
-        yield _completion_chunk(completion_id, now, model, content=f"Error: {response.error}", finish_reason="stop")
+        # Use an SSE error payload instead of disguising a provider failure as a successful answer.
+        error = {"error": {"message": response.error or "Provider error", "type": "provider_error", "code": "provider_error"}}
+        yield "data: " + json.dumps(error, ensure_ascii=False) + "\n\n"
         yield "data: [DONE]\n\n"
         return
 
+    yield _completion_chunk(completion_id, now, model, role="assistant")
+
     if has_tools and response.text:
-        tool_calls = parse_tool_calls(response.text)
+        tool_calls = parse_tool_calls(response.text, tools=tools, tool_choice=tool_choice)
         if tool_calls:
             async for chunk in stream_tool_calls(tool_calls, completion_id, now, model):
                 yield chunk

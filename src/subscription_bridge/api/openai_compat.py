@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import time
 import uuid
 from collections.abc import AsyncGenerator
@@ -133,13 +134,32 @@ def _resolve_agent_answer(result: Any) -> str:
     return "No answer generated"
 
 
-def _conversation_id(messages: list[Any]) -> str:
-    import hashlib
-    raw = "|".join(
-        str(m.role) + ":" + (str(m.content)[:200] if m.content else "")
-        for m in messages[:6]
-    )
-    return "conv-" + hashlib.md5(raw.encode()).hexdigest()[:12]
+def _conversation_id(messages: list[Any], request: Request | None = None) -> str:
+    """Return a stable browser-conversation key without hashing mutable history.
+
+    Prefer a host session ID when available. Otherwise use the complete system
+    prompt and first user message, not a short prefix of the first few messages.
+    """
+    if request is not None:
+        for header in ("x-opencode-session", "x-opencode-session-id", "x-session-id"):
+            supplied = request.headers.get(header, "").strip()
+            if supplied:
+                digest = hashlib.sha256(supplied.encode("utf-8")).hexdigest()[:24]
+                return f"opencode-{digest}"
+
+    system_text: list[str] = []
+    first_user = ""
+    for message in messages:
+        role = getattr(message, "role", "")
+        content = getattr(message, "content", None)
+        text = extract_text(content) if isinstance(content, (str, list)) else ""
+        if role == "system":
+            system_text.append(text)
+        elif role == "user" and text.strip() and not first_user:
+            first_user = text
+    identity = "\0".join([*system_text, first_user])
+    digest = hashlib.sha256(identity.encode("utf-8", errors="replace")).hexdigest()[:24]
+    return f"conv-{digest}"
 
 
 def _resolve_mode(request: Request) -> str:
@@ -211,7 +231,8 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
         has_tools=bool(body.get("tools")),
         workspace_body=body.get("workspace"),
         workspace_header=request.headers.get("x-workspace-root") or request.headers.get("x-workspace"),
-        body_preview=_json.dumps(body)[:500],
+        # Never log message contents: requests may contain credentials or source code.
+        body_bytes=len(_json.dumps(body, ensure_ascii=False).encode("utf-8")),
     )
 
     try:
@@ -249,9 +270,9 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
             param="model",
         )
 
-    has_tools = bool(req.tools)
+    has_tools = bool(req.tools) and req.tool_choice != "none"
     prompt, system_prompt = _convert_messages(
-        req.messages, req.tools,
+        req.messages, req.tools if has_tools else None,
         tool_choice=req.tool_choice,
         require_json_tools=has_tools,
     )
@@ -271,18 +292,21 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
     # uuid per tool turn forced a brand-new chat every time, which re-sent the
     # full system prompt and dropped all prior context.
     provider_req = ProviderRequest(
-        run_id=_conversation_id(req.messages),
+        run_id=_conversation_id(req.messages, request),
         prompt=prompt,
         system_prompt=system_prompt or None,
         attachments=attachments or None,
         require_json=has_tools,
         timeout_seconds=max(req.max_tokens // 100, 30),
-        metadata=provider_metadata(req.model),
+        metadata={**provider_metadata(req.model), "isolated_conversation": True},
     )
 
     if req.stream:
         return StreamingResponse(
-            _stream_response(provider_adapter, provider_req, req.model, has_tools=has_tools),
+            _stream_response(
+                provider_adapter, provider_req, req.model, has_tools=has_tools,
+                tools=req.tools if has_tools else None, tool_choice=req.tool_choice,
+            ),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -293,17 +317,21 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
 
     # OpenAI compatibility mode is a model gateway. It may return tool_calls,
     # but it never executes local tools; clients such as OpenCode own execution.
-    response = await provider_adapter.send_prompt(provider_req)
-    _cleanup_temp_files(attachments)
+    try:
+        response = await provider_adapter.send_prompt(provider_req)
+    finally:
+        _cleanup_temp_files(attachments)
 
     if not response.success:
         return _error_json(response.error or "Provider error", code="provider_error", status_code=502)
 
-    parsed_tool_calls = _parse_tool_calls(response.text) if has_tools else []
+    parsed_tool_calls = parse_tool_calls(response.text, tools=req.tools, tool_choice=req.tool_choice) if has_tools else []
     if parsed_tool_calls:
+        seen_ids: set[str] = set()
         for idx, tool_call in enumerate(parsed_tool_calls, start=1):
-            if not tool_call.id:
-                tool_call.id = f"call_{idx}"
+            if not tool_call.id or tool_call.id in seen_ids:
+                tool_call.id = f"call_{uuid.uuid4().hex[:20]}"
+            seen_ids.add(tool_call.id)
         return ChatCompletionResponse(
             id=f"chatcmpl-{uuid.uuid4().hex[:12]}", created=int(time.time()), model=req.model,
             choices=[
@@ -371,9 +399,17 @@ async def _stream_response(
     request: ProviderRequest,
     model: str,
     has_tools: bool = False,
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: str | dict[str, Any] | None = None,
 ) -> AsyncGenerator[str, None]:
-    async for chunk in stream_response(adapter, request, model, has_tools=has_tools):
-        yield chunk
+    try:
+        async for chunk in stream_response(
+            adapter, request, model, has_tools=has_tools,
+            tools=tools, tool_choice=tool_choice,
+        ):
+            yield chunk
+    finally:
+        cleanup_temp_files(request.attachments or [])
 
 
 async def _stream_agent_answer(answer: str, model: str) -> AsyncGenerator[str, None]:

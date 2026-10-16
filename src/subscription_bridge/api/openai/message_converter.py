@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import base64
 import json
+import ipaddress
 import os
 import re
+import socket
 import tempfile
+from urllib.parse import urljoin, urlparse
 from typing import Any
 
 import httpx
@@ -14,6 +17,18 @@ import httpx
 # them to escape JSON (which they get wrong), we ask them to wrap each argument
 # value in delimiter blocks whose body is taken verbatim. The bridge parses by
 # delimiter, so the body can contain anything without breaking the parse.
+BROWSER_RESPONSE_STYLE_SYSTEM_PROMPT = (
+    "BROWSER RESPONSE STYLE (MANDATORY):\n"
+    "Return the answer as concise plain text or ordinary Markdown. Do not generate or "
+    "render an HTML page, JavaScript, CSS, an interactive widget, canvas, embedded app, "
+    "artifact preview, or simulated UI. Do not describe a webpage or interactive result "
+    "instead of answering the request. Avoid unnecessary preambles, disclaimers, self-talk, "
+    "and commentary; answer directly. Do not claim that a tool was executed. When the task "
+    "requires code changes, use the supplied tool-call format for the tool arguments and keep "
+    "the visible answer short. Only provide HTML/code in a normal answer when the user "
+    "explicitly asks to see that code.\n"
+)
+
 TOOL_CALL_SYSTEM_PROMPT = (
     "You have access to tools. To call a tool, output EXACTLY this format and "
     "nothing else:\n\n"
@@ -41,8 +56,6 @@ def convert_messages(
     tool_choice: str | dict[str, Any] | None = None,
     require_json_tools: bool = False,
 ) -> tuple[str, str]:
-    del tool_choice
-
     system_parts: list[str] = []
     conversation: list[str] = []
 
@@ -51,7 +64,7 @@ def convert_messages(
     for msg in messages:
         if msg.role == "system":
             raw = extract_text(msg.content) if msg.content else ""
-            system_parts.append(_compact_system_prompt(raw))
+            system_parts.append(raw)
 
     for msg in relevant:
         role = msg.role
@@ -75,9 +88,18 @@ def convert_messages(
 
     if tools and require_json_tools:
         tools_prompt = TOOL_CALL_SYSTEM_PROMPT.format(tools_desc=_format_tools_for_prompt(tools))
+        if tool_choice == "required":
+            tools_prompt += "\n\nTOOL CHOICE: A tool call is required. Do not answer with normal text."
+        elif isinstance(tool_choice, dict):
+            function = tool_choice.get("function", {})
+            forced_name = function.get("name") if isinstance(function, dict) else None
+            if tool_choice.get("type") == "function" and forced_name:
+                tools_prompt += f"\n\nTOOL CHOICE: You MUST call only the tool named {forced_name}."
         system_parts.append(tools_prompt)
 
-    system_prompt = "\n".join(system_parts) if system_parts else ""
+    if system_parts:
+        system_parts.append(BROWSER_RESPONSE_STYLE_SYSTEM_PROMPT)
+    system_prompt = "\n\n".join(system_parts) if system_parts else BROWSER_RESPONSE_STYLE_SYSTEM_PROMPT
 
     prompt = "\n".join(["Conversation:", *conversation]) if conversation else ""
     return prompt, system_prompt
@@ -177,30 +199,76 @@ def extract_images_from_content(content: str | list[dict[str, Any]]) -> list[str
     return paths
 
 
+_MAX_REMOTE_IMAGE_BYTES = 20 * 1024 * 1024
+
+
+def _is_public_http_url(url: str) -> bool:
+    """Reject local/private targets so arbitrary image URLs cannot reach intranet services."""
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+            return False
+        if parsed.username or parsed.password:
+            return False
+        host = parsed.hostname.rstrip(".").lower()
+        if host in {"localhost", "localhost.localdomain"} or host.endswith((".localhost", ".local", ".internal")):
+            return False
+        try:
+            address = ipaddress.ip_address(host)
+            return address.is_global
+        except ValueError:
+            pass
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        return bool(addresses) and all(ipaddress.ip_address(item[4][0]).is_global for item in addresses)
+    except (OSError, ValueError, socket.gaierror):
+        return False
+
+
 def save_image(url: str) -> str | None:
     try:
         if url.startswith("data:"):
             match = re.match(r"data:image/(\w+);base64,(.+)", url)
             if not match:
                 return None
-            ext = match.group(1)
-            data = base64.b64decode(match.group(2))
+            ext = match.group(1).lower()
+            data = base64.b64decode(match.group(2), validate=True)
+            if len(data) > _MAX_REMOTE_IMAGE_BYTES:
+                return None
             with tempfile.NamedTemporaryFile(
                 mode="wb", suffix=f".{ext}", delete=False, prefix="bridge_img_",
             ) as f:
                 f.write(data)
                 return f.name
 
-        response = httpx.get(url, timeout=30, follow_redirects=True)
+        target = url
+        response = None
+        for _ in range(4):
+            if not _is_public_http_url(target):
+                return None
+            response = httpx.get(target, timeout=30, follow_redirects=False)
+            if response.status_code not in (301, 302, 303, 307, 308):
+                break
+            location = response.headers.get("location")
+            if not location:
+                return None
+            target = urljoin(target, location)
+        if response is None or response.status_code in (301, 302, 303, 307, 308):
+            return None
         response.raise_for_status()
-        content_type = response.headers.get("content-type", "")
-        ext = "png"
+        if len(response.content) > _MAX_REMOTE_IMAGE_BYTES:
+            return None
+        content_type = response.headers.get("content-type", "").lower()
         if "jpeg" in content_type or "jpg" in content_type:
             ext = "jpg"
         elif "gif" in content_type:
             ext = "gif"
         elif "webp" in content_type:
             ext = "webp"
+        elif "png" in content_type:
+            ext = "png"
+        else:
+            return None
         with tempfile.NamedTemporaryFile(
             mode="wb", suffix=f".{ext}", delete=False, prefix="bridge_img_",
         ) as f:
@@ -225,5 +293,6 @@ def _format_tools_for_prompt(tools: list[dict[str, Any]]) -> str:
         fname = fn.get("name", "?") if isinstance(fn, dict) else "?"
         fdesc = fn.get("description", "") if isinstance(fn, dict) else ""
         fparams = fn.get("parameters", {}) if isinstance(fn, dict) else {}
-        tools_desc_lines.append(f"  {fname}: {fdesc} | args: {json.dumps(fparams)[:300]}")
+        schema = json.dumps(fparams, ensure_ascii=False, separators=(",", ":"))
+        tools_desc_lines.append(f"  {fname}: {fdesc} | JSON Schema: {schema}")
     return "\n".join(tools_desc_lines)
