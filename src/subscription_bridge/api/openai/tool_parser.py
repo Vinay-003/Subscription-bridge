@@ -84,7 +84,13 @@ def parse_tool_calls(
             forced_name = function["name"]
 
     result: list[ToolCall] = []
-    tool_aliases = {"file_read": "read", "file_write": "write", "file_edit": "edit", "run_command": "bash", "todo_write": "todowrite"}
+    tool_aliases = {
+        "file_read": "read",
+        "file_write": "write",
+        "file_edit": "edit",
+        "run_command": "bash",
+        "todo_write": "todowrite",
+    }
     param_aliases = {"path": "filePath", "file_path": "filePath", "old_string": "oldString", "new_string": "newString"}
     for call in raw_calls:
         name = call.function.name
@@ -363,7 +369,10 @@ def _decode_loose(raw: str) -> str:
     )
 
 
-_SENTINEL_TOOLCALL = re.compile(r"<<<\s*TOOLCALL\s*:\s*([A-Za-z0-9_.\-]+)\s*>>>(.*?)(?:<<<\s*END\s*>>>|$)", re.DOTALL | re.IGNORECASE)
+_SENTINEL_TOOLCALL = re.compile(
+    r"<<<\s*TOOLCALL\s*:\s*([A-Za-z0-9_.\-]+)\s*>>>(.*?)(?:<<<\s*END\s*>>>|$)",
+    re.DOTALL | re.IGNORECASE,
+)
 _SENTINEL_ARG = re.compile(r"<<<\s*ARG\s*:\s*([A-Za-z0-9_.\-]+)\s*>>>[ \t]*(?:\r?\n)?", re.IGNORECASE)
 
 
@@ -433,7 +442,8 @@ def _tool_calls_from_json_value(data: Any) -> list[ToolCall]:
     if isinstance(data, list):
         return [_to_tool_call(_ensure_function_wrapper(tc)) for tc in data if isinstance(tc, dict)]
     if isinstance(data, dict):
-        if "function" in data and isinstance(data.get("function"), dict) and isinstance(data["function"].get("name"), str):
+        func = data.get("function")
+        if "function" in data and isinstance(func, dict) and isinstance(func.get("name"), str):
             return [_to_tool_call(data)]
         if isinstance(data.get("name"), str) and ("arguments" in data or "parameters" in data or "id" in data):
             return [_to_tool_call(_ensure_function_wrapper(data))]

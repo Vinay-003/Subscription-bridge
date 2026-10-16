@@ -32,8 +32,8 @@ from subscription_bridge.providers.gemini.prompt_io import (
     set_prompt_text,
 )
 from subscription_bridge.providers.gemini.response_reader import (
-    submission_activity_report,
     extract_latest_assistant_text,
+    submission_activity_report,
     wait_for_response_complete,
     wait_for_send_confirmation,
 )

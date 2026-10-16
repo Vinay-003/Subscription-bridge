@@ -60,17 +60,18 @@ class BashTool(Tool):
         env["PWD"] = str(Path(workspace).expanduser().resolve())
 
         try:
-            process_options = {
-                "stdout": asyncio.subprocess.PIPE,
-                "stderr": asyncio.subprocess.PIPE,
-                "cwd": str(Path(workspace).expanduser().resolve()),
-                "env": env,
-            }
-            if os.name == "posix":
-                # A shell command may spawn children that inherit its output pipes.
-                # A separate process group lets timeout handling kill the whole tree.
-                process_options["start_new_session"] = True
-            proc = await asyncio.create_subprocess_shell(command, **process_options)
+            cwd = str(Path(workspace).expanduser().resolve())
+            start_new_session = os.name == "posix"
+            # A shell command may spawn children that inherit its output pipes.
+            # A separate process group lets timeout handling kill the whole tree.
+            proc = await asyncio.create_subprocess_shell(
+                command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=cwd,
+                env=env,
+                start_new_session=start_new_session,
+            )
 
             try:
                 stdout_bytes, stderr_bytes = await asyncio.wait_for(

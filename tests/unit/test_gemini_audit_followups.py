@@ -2,15 +2,24 @@ from __future__ import annotations
 
 import json
 
+from subscription_bridge.api.openai.message_converter import _compact_system_prompt
 from subscription_bridge.api.openai.tool_parser import parse_tool_calls
 from subscription_bridge.browser.ui_guard import default_unsafe_words
-from subscription_bridge.api.openai.message_converter import _compact_system_prompt
 
 
 def test_tool_parser_normalizes_aliases_and_required_bash_description():
-    tools = [{"type": "function", "function": {"name": "bash", "description": "run", "parameters": {
-        "type": "object", "properties": {"command": {"type": "string"}, "description": {"type": "string"}}, "required": ["command", "description"]
-    }}}]
+    tools = [{
+        "type": "function",
+        "function": {
+            "name": "bash",
+            "description": "run",
+            "parameters": {
+                "type": "object",
+                "properties": {"command": {"type": "string"}, "description": {"type": "string"}},
+                "required": ["command", "description"],
+            },
+        },
+    }]
     calls = parse_tool_calls('<<< TOOLCALL: run_command >>>\n<<<ARG:command>>> echo hi\n<<<END>>>', tools=tools)
     assert len(calls) == 1
     assert calls[0].function.name == "bash"
@@ -20,7 +29,17 @@ def test_tool_parser_normalizes_aliases_and_required_bash_description():
 
 
 def test_sentinel_parser_accepts_inline_values_and_missing_end_marker():
-    tools = [{"type": "function", "function": {"name": "read", "parameters": {"type": "object", "properties": {"filePath": {"type": "string"}}, "required": ["filePath"]}}}]
+    tools = [{
+        "type": "function",
+        "function": {
+            "name": "read",
+            "parameters": {
+                "type": "object",
+                "properties": {"filePath": {"type": "string"}},
+                "required": ["filePath"],
+            },
+        },
+    }]
     calls = parse_tool_calls('Copy code\n<<< TOOLCALL: read >>><<<ARG:filePath>>> /tmp/a.txt', tools=tools)
     assert len(calls) == 1
     assert json.loads(calls[0].function.arguments) == {"filePath": "/tmp/a.txt"}
@@ -35,7 +54,11 @@ def test_new_chat_is_not_globally_blocked_by_ui_guard():
 
 
 def test_compacted_opencode_prompt_preserves_env_and_skills():
-    prompt = "You are opencode\n# Core Mandates\n# Primary Workflows\n# Operational Guidelines\n<env><cwd>/tmp/project</cwd></env>\n<available_skills><skill>test</skill></available_skills>"
+    prompt = (
+        "You are opencode\n# Core Mandates\n# Primary Workflows\n# Operational Guidelines\n"
+        "<env><cwd>/tmp/project</cwd></env>\n"
+        "<available_skills><skill>test</skill></available_skills>"
+    )
     compacted = _compact_system_prompt(prompt)
     assert "<env>" in compacted and "</env>" in compacted
     assert "<available_skills>" in compacted
@@ -43,12 +66,20 @@ def test_compacted_opencode_prompt_preserves_env_and_skills():
 
 def test_tool_results_are_not_truncated_at_one_thousand_characters():
     from types import SimpleNamespace
+
     from subscription_bridge.api.openai.message_converter import convert_messages
 
     large = "x" * 1500
-    messages = [SimpleNamespace(role="user", content="read file", tool_calls=None, tool_call_id=None),
-                SimpleNamespace(role="assistant", content=None, tool_calls=[{"function": {"name": "read", "arguments": "{}"}}], tool_call_id=None),
-                SimpleNamespace(role="tool", content=large, tool_calls=None, tool_call_id="call_1")]
+    messages = [
+        SimpleNamespace(role="user", content="read file", tool_calls=None, tool_call_id=None),
+        SimpleNamespace(
+            role="assistant",
+            content=None,
+            tool_calls=[{"function": {"name": "read", "arguments": "{}"}}],
+            tool_call_id=None,
+        ),
+        SimpleNamespace(role="tool", content=large, tool_calls=None, tool_call_id="call_1"),
+    ]
     prompt, _ = convert_messages(messages, full_history=True)
     assert large in prompt
 

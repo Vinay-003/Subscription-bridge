@@ -29,7 +29,13 @@ async def stream_response(
 
     if not response.success:
         # Use an SSE error payload instead of disguising a provider failure as a successful answer.
-        error = {"error": {"message": response.error or "Provider error", "type": "provider_error", "code": "provider_error"}}
+        error = {
+            "error": {
+                "message": response.error or "Provider error",
+                "type": "provider_error",
+                "code": "provider_error",
+            }
+        }
         yield "data: " + json.dumps(error, ensure_ascii=False) + "\n\n"
         yield "data: [DONE]\n\n"
         return
@@ -189,5 +195,12 @@ def _usage_chunk(completion_id: str, created: int, model: str, prompt: str, comp
         return max(1, len(text) // 4) if text else 0
     usage = {"prompt_tokens": estimate(prompt), "completion_tokens": estimate(completion)}
     usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
-    payload = {"id": completion_id, "object": "chat.completion.chunk", "created": created, "model": model, "choices": [], "usage": usage}
+    payload = {
+        "id": completion_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
+        "choices": [],
+        "usage": usage,
+    }
     return "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"

@@ -206,10 +206,12 @@ class SessionPool:
 
         try:
             signature = inspect.signature(page_factory)
-            accepts_arg = any(
-                p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.VAR_POSITIONAL)
-                for p in signature.parameters.values()
+            pos_kinds = (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.VAR_POSITIONAL,
             )
+            accepts_arg = any(p.kind in pos_kinds for p in signature.parameters.values())
         except (TypeError, ValueError):
             accepts_arg = False
         if accepts_arg:

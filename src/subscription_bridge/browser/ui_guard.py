@@ -72,7 +72,10 @@ async def safe_click_labels(
     exact: bool = False,
     timeout: float = 8.0,
 ) -> bool:
-    bad = list(unsafe_words) if unsafe_words is not None else [w for w in _UNSAFE_WORDS_DEFAULT if not any(w.lower() in label.lower() for label in labels)]
+    if unsafe_words is None:
+        bad = [w for w in _UNSAFE_WORDS_DEFAULT if not any(w.lower() in label.lower() for label in labels)]
+    else:
+        bad = list(unsafe_words)
     labels_json = str(labels)
     bad = [w for w in bad if not any(w.lower() in label.lower() for label in labels)]
     bad_json = str(bad)

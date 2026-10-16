@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import time
 import uuid
 from collections.abc import AsyncGenerator
@@ -286,7 +286,9 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
     )
 
     if isinstance(req.response_format, dict) and req.response_format.get("type") == "json_object":
-        system_prompt = (system_prompt or "") + "\n\nOUTPUT FORMAT: Return only a valid JSON object. Do not wrap it in Markdown fences or add commentary."
+        system_prompt = (system_prompt or "") + (
+            "\n\nOUTPUT FORMAT: Return only a valid JSON object. Do not wrap it in Markdown fences or add commentary."
+        )
 
     workspace_resolution = resolve_workspace(req, request)
     log.info("workspace_resolved", workspace=workspace_resolution.path, source=workspace_resolution.source)
@@ -338,7 +340,9 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
     if not response.success:
         return _error_json(response.error or "Provider error", code="provider_error", status_code=502)
 
-    parsed_tool_calls = parse_tool_calls(response.text, tools=req.tools, tool_choice=req.tool_choice) if has_tools else []
+    parsed_tool_calls = (
+        parse_tool_calls(response.text, tools=req.tools, tool_choice=req.tool_choice) if has_tools else []
+    )
     if req.parallel_tool_calls is False:
         parsed_tool_calls = parsed_tool_calls[:1]
     if parsed_tool_calls:

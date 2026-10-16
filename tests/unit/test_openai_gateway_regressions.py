@@ -58,19 +58,30 @@ def test_sentinel_parser_preserves_multiline_string_and_coerces_schema_types() -
 
 
 def test_parser_drops_unknown_tool_names_and_honors_forced_tool() -> None:
-    raw = '{"tool_calls":[{"function":{"name":"unknown","arguments":{}}},{"function":{"name":"update_config","arguments":{"enabled":true,"retries":2,"ratio":1.0,"labels":[],"options":{},"content":"ok"}}}]}'
-    calls = parse_tool_calls(raw, tools=[_tool()], tool_choice={"type": "function", "function": {"name": "update_config"}})
+    raw = (
+        '{"tool_calls":[{"function":{"name":"unknown","arguments":{}}},'
+        '{"function":{"name":"update_config","arguments":{"enabled":true,'
+        '"retries":2,"ratio":1.0,"labels":[],"options":{},"content":"ok"}}}]}'
+    )
+    tool_choice = {"type": "function", "function": {"name": "update_config"}}
+    calls = parse_tool_calls(raw, tools=[_tool()], tool_choice=tool_choice)
     assert len(calls) == 1
     assert calls[0].function.name == "update_config"
 
 
 def test_tool_choice_none_disables_tool_parsing() -> None:
-    raw = '{"name":"update_config","arguments":{"enabled":true,"retries":2,"ratio":1.0,"labels":[],"options":{},"content":"ok"}}'
+    raw = (
+        '{"name":"update_config","arguments":{"enabled":true,'
+        '"retries":2,"ratio":1.0,"labels":[],"options":{},"content":"ok"}}'
+    )
     assert parse_tool_calls(raw, tools=[_tool()], tool_choice="none") == []
 
 
 def test_malformed_typed_argument_is_rejected() -> None:
-    raw = '{"name":"update_config","arguments":{"enabled":"perhaps","retries":"bad","ratio":"1.0","labels":"[]","options":"{}","content":"ok"}}'
+    raw = (
+        '{"name":"update_config","arguments":{"enabled":"perhaps",'
+        '"retries":"bad","ratio":"1.0","labels":"[]","options":"{}","content":"ok"}}'
+    )
     assert parse_tool_calls(raw, tools=[_tool()]) == []
 
 
@@ -109,7 +120,15 @@ def test_conversation_id_does_not_change_as_tool_results_are_added() -> None:
         OpenAIMessage(role="user", content="Fix the app"),
     ]
     next_turn = first + [
-        OpenAIMessage(role="assistant", content=None, tool_calls=[{"id": "call_1", "type": "function", "function": {"name": "file_read", "arguments": "{}"}}]),
+        OpenAIMessage(
+            role="assistant",
+            content=None,
+            tool_calls=[{
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "file_read", "arguments": "{}"},
+            }],
+        ),
         OpenAIMessage(role="tool", content="file contents", tool_call_id="call_1"),
     ]
     assert _conversation_id(first) == _conversation_id(next_turn)
@@ -119,7 +138,15 @@ def test_converter_keeps_tool_result_as_current_tail() -> None:
     messages = [
         OpenAIMessage(role="system", content="system instructions"),
         OpenAIMessage(role="user", content="Fix the app"),
-        OpenAIMessage(role="assistant", content=None, tool_calls=[{"id": "call_1", "type": "function", "function": {"name": "file_read", "arguments": "{}"}}]),
+        OpenAIMessage(
+            role="assistant",
+            content=None,
+            tool_calls=[{
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "file_read", "arguments": "{}"},
+            }],
+        ),
         OpenAIMessage(role="tool", content="file contents", tool_call_id="call_1"),
     ]
     prompt, _ = convert_messages(messages)

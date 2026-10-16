@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import time
 import re
+import time
 from typing import Any
 
 from subscription_bridge.providers.gemini.selectors import get_selector
@@ -11,24 +11,56 @@ async def submission_activity_report(page: Any) -> dict[str, Any]:
     script = r"""
     () => {
         const root = document.querySelector('main') || document.body;
-        const visible = el => { if (!el) return false; const r=el.getBoundingClientRect(); const s=getComputedStyle(el); return r.width>0 && r.height>0 && s.display!=='none' && s.visibility!=='hidden' && s.opacity!=='0'; };
-        const textOf = el => ((el.getAttribute('aria-label')||'')+' '+(el.getAttribute('title')||'')+' '+(el.innerText||'')).replace(/\s+/g,' ').trim().toLowerCase();
-        const bodyText = (root.innerText || '').replace(/\s+/g,' ').toLowerCase();
+        const visible = el => {
+            if (!el) return false;
+            const r = el.getBoundingClientRect();
+            const s = getComputedStyle(el);
+            return (
+                r.width > 0 && r.height > 0
+                && s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0'
+            );
+        };
+        const textOf = el => (
+            (el.getAttribute('aria-label') || '') + ' '
+            + (el.getAttribute('title') || '') + ' '
+            + (el.innerText || '')
+        ).replace(/\s+/g, ' ').trim().toLowerCase();
+        const bodyText = (root.innerText || '').replace(/\s+/g, ' ').toLowerCase();
         const buttons = Array.from(document.querySelectorAll('button,[role="button"]')).filter(visible);
         const buttonText = buttons.map(textOf).join(' | ');
         const stopVisible = /stop response|cancel generation|stop generating|stop streaming/.test(buttonText);
         const thinkingVisible = /show thinking|creating image|generating/.test(buttonText);
         let progressVisible = false;
-        for (const el of document.querySelectorAll('[role="progressbar"],mat-progress-spinner,mat-progress-bar,.spinner,.loading,.progress')) if (visible(el)) { progressVisible=true; break; }
-        const selectors = ['model-response','.model-response','.response-container','[data-response-index]','[data-chunk-index]','[data-testid*="response"]'];
+        const progressSel = '[role="progressbar"],mat-progress-spinner,mat-progress-bar,.spinner,.loading,.progress';
+        for (const el of document.querySelectorAll(progressSel)) {
+            if (visible(el)) { progressVisible = true; break; }
+        }
+        const selectors = [
+            'model-response','.model-response','.response-container',
+            '[data-response-index]','[data-chunk-index]','[data-testid*="response"]'
+        ];
         const responseEls = new Set();
-        for (const sel of selectors) for (const el of document.querySelectorAll(sel)) if (visible(el)) responseEls.add(el);
-        const responses = Array.from(responseEls).sort((a,b) => { const pos=a.compareDocumentPosition(b); return pos & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1; });
+        for (const sel of selectors) {
+            for (const el of document.querySelectorAll(sel)) if (visible(el)) responseEls.add(el);
+        }
+        const responses = Array.from(responseEls).sort((a,b) => {
+            const pos = a.compareDocumentPosition(b);
+            return pos & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
+        });
         const last = responses[responses.length-1];
         const lastText = last ? (last.innerText || last.textContent || '').trim() : '';
         const path = window.location.pathname || '';
         const conversationUrl = /^\/(?:u\/\d+\/)?app(?:\/|$)/.test(path);
-        return {stopVisible, thinkingVisible, progressVisible, assistantCount:responses.length, lastResponseLength:lastText.length, lastResponseText:lastText, conversationUrl, path};
+        return {
+            stopVisible,
+            thinkingVisible,
+            progressVisible,
+            assistantCount: responses.length,
+            lastResponseLength: lastText.length,
+            lastResponseText: lastText,
+            conversationUrl,
+            path
+        };
     }
     """
     try:
@@ -39,7 +71,9 @@ async def submission_activity_report(page: Any) -> dict[str, Any]:
 
 async def generation_in_progress(page: Any) -> bool:
     report = await submission_activity_report(page)
-    return bool(report.get("stopVisible") or report.get("thinkingVisible") or report.get("progressVisible"))
+    return bool(
+        report.get("stopVisible") or report.get("thinkingVisible") or report.get("progressVisible")
+    )
 
 
 async def wait_for_send_confirmation(page: Any, timeout: float = 35.0, pre_send_count: int = 0) -> bool:
@@ -56,7 +90,9 @@ async def wait_for_send_confirmation(page: Any, timeout: float = 35.0, pre_send_
     return False
 
 
-async def wait_for_response_complete(page: Any, timeout: float = 120.0, poll_interval: float = 0.5, pre_send_count: int = 0) -> bool:
+async def wait_for_response_complete(
+    page: Any, timeout: float = 120.0, poll_interval: float = 0.5, pre_send_count: int = 0
+) -> bool:
     deadline = time.monotonic() + timeout
     last_text = ""
     stable_cycles = 0

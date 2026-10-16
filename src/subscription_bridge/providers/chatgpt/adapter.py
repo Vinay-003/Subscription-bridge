@@ -522,9 +522,16 @@ async def _submission_activity_report(page: Any) -> dict[str, Any]:
         )) {
             if (visible(el)) { progressVisible = true; break; }
         }
-        const assistantEls = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]')).filter(visible);
+        const assistantEls = Array.from(
+            document.querySelectorAll('[data-message-author-role="assistant"]')
+        ).filter(visible);
         const stopButton = document.querySelector('button[data-testid="stop-button"]');
-        return {stopVisible: stopVisible || visible(stopButton), thinkingVisible, progressVisible, assistantCount: assistantEls.length};
+        return {
+            stopVisible: stopVisible || visible(stopButton),
+            thinkingVisible,
+            progressVisible,
+            assistantCount: assistantEls.length,
+        };
     }
     """
     try:
