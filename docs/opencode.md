@@ -223,3 +223,11 @@ When the model decides to call a tool, the response contains:
 - **Browser latency**: Responses are slower than API-based models.
 - **No multimodal**: Image inputs in content arrays are accepted but ignored.
 - **API key**: Any value works (e.g., `"dummy"`). The server does not validate.
+
+### Browser conversation recovery and plain-text responses
+
+The OpenAI-compatible gateway stores the full normalized OpenCode transcript in request metadata as a recovery prompt. Providers use it only when a browser conversation is new or has been reset; continuing conversations receive the incremental message tail to avoid duplicating history. Browser-facing system instructions request concise plain text or ordinary Markdown and discourage HTML pages, interactive widgets, embedded apps, and unnecessary commentary.
+
+For visible-tab operation, configure `browser.mode: cdp` and `browser.reuse_open_tab: true` in `configs/app.yaml`. The bridge claims an unallocated tab for the requested provider and disconnects from CDP on shutdown without explicitly closing the external Chrome context. ChatGPT is enabled in `configs/providers.yaml` by default; log in to the provider in the Chrome profile before using it.
+
+The OpenAI-compatible API is available at `/v1/chat/completions` and `/v1/models`; `/chat/completions` and `/models` aliases are also provided. Streaming requests support `stream_options: {"include_usage": true}`.

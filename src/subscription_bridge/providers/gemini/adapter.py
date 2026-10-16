@@ -72,10 +72,11 @@ class GeminiProviderAdapter(ProviderAdapter):
                 allow_cross_run_reuse=not bool((request.metadata or {}).get("isolated_conversation")),
             )
 
-            # Only inject the (potentially huge) system prompt on the first turn of
-            # a conversation. On continuations the browser chat already holds it in
-            # history; re-sending it every turn is wasteful and buries the actual
-            # task, which makes the model refuse or lose context.
+            # On a fresh/reset browser chat, restore the full OpenCode transcript;
+            # on a continuing browser chat, send only the incremental tail.
+            if not session.has_active_conversation and isinstance(request.metadata, dict):
+                prompt = str(request.metadata.get("full_prompt") or prompt)
+            # The system/tool instructions are injected once per browser chat.
             if request.system_prompt and not session.has_active_conversation:
                 prompt = request.system_prompt + "\n\n" + prompt
 
