@@ -50,4 +50,4 @@ gemini:
 
 api:
   host: 127.0.0.1
-  port: 8742
+  port: 8787

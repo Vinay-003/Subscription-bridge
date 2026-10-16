@@ -77,8 +77,11 @@ Recommended to include with OpenCode:
 }
 ```
 
-OpenCode manages context and session history. Each request to SubscriptionBridge
-uses a fresh chat or guaranteed reset. OpenCode is the source of truth.
+OpenCode owns context, session history, tools, and tool execution. SubscriptionBridge
+keeps a browser conversation tied to a stable conversation key and serializes requests
+to that tab. Distinct conversation keys never borrow an idle tab from another session.
+The provider browser should remain visible; CDP mode reuses an existing matching provider
+tab for the first session and creates a separate tab for another isolated conversation.
 
 ---
 
@@ -175,10 +178,11 @@ bridge server
 SubscriptionBridge supports OpenAI tool calls in the following way:
 
 1. **Tools are accepted** in `/v1/chat/completions` requests
-2. **Tools are converted** into prompt instructions — the model is told
-   to respond with a JSON `tool_calls` object when a tool is needed
-3. **The model's JSON output is parsed** and converted to OpenAI-compatible
-   `tool_calls` in the response
+2. **Tools and their complete JSON Schemas are sent** in bridge prompt instructions.
+   Browser models use a delimiter-based format for robust multiline arguments; ordinary
+   JSON tool-call responses are also accepted.
+3. **The model output is parsed, validated against the tools on the current request,**
+   and converted to OpenAI-compatible `tool_calls` in the response
 4. **Tool results** from OpenCode (`role: "tool"`) are converted into readable
    transcript entries in the prompt
 5. **SubscriptionBridge does not execute** tools when used via OpenCode — OpenCode handles execution
@@ -208,10 +212,11 @@ When the model decides to call a tool, the response contains:
 
 ## Known Limitations
 
-- **Tool call reliability**: Browser-based models may not reliably produce structured
-  tool call JSON. Results may vary compared to API-based models.
+- **Tool call reliability**: Browser models are prompted to emit delimiter-based calls,
+  which are then schema-checked and type-coerced. This remains less deterministic than
+  native API function calling; malformed calls are rejected rather than passed to OpenCode.
 - **Streaming is simulated**: True token-by-token streaming from the browser
-  provider is not available. Response text is chunked into SSE events.
+  provider is not available. Completed response text/tool calls are chunked into SSE events.
 - **Token counts are approximate**: Uses character count / 4, not a real tokenizer.
 - **Context limit is approximate**: Based on estimated tokens. If exceeded, the
   API returns `context_length_exceeded` — OpenCode compaction handles this.

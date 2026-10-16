@@ -172,6 +172,8 @@ SubscriptionBridge exposes an OpenAI-compatible `/v1` API for integration with [
 
 This API is a model gateway only. `/v1/chat/completions` forwards prompts to the selected browser model and may return OpenAI-compatible `tool_calls`, but it does not execute local tools. Clients such as OpenCode own project context, file edits, shell commands, and tool result submission.
 
+The browser provider is instructed to answer in concise plain text or ordinary Markdown. It is told not to generate HTML pages, interactive widgets, embedded apps, or artifact previews unless HTML/code is explicitly requested. Tool requests are translated to OpenAI-compatible `tool_calls`; OpenCode executes them.
+
 ```bash
 # List models
 curl http://127.0.0.1:8787/v1/models
