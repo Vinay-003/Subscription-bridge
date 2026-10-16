@@ -32,6 +32,7 @@ from subscription_bridge.providers.gemini.prompt_io import (
     set_prompt_text,
 )
 from subscription_bridge.providers.gemini.response_reader import (
+    submission_activity_report,
     extract_latest_assistant_text,
     wait_for_response_complete,
     wait_for_send_confirmation,
@@ -136,17 +137,19 @@ class GeminiProviderAdapter(ProviderAdapter):
             # in the system prompt; do not append a contradictory JSON directive.
 
             await find_composer(session.page)
+            pre_send_report = await submission_activity_report(session.page)
+            pre_send_count = int(pre_send_report.get("assistantCount", 0))
             await set_prompt_text(session.page, prompt)
 
             from subscription_bridge.providers.gemini.prompt_io import submit_via_enter
             await submit_via_enter(session.page)
             logger.info("send_method_used", method="enter", run_id=request.run_id)
 
-            accepted = await wait_for_send_confirmation(session.page, timeout=15.0)
+            accepted = await wait_for_send_confirmation(session.page, timeout=15.0, pre_send_count=pre_send_count)
             if not accepted:
                 logger.info("send_method_fallback", method="send_button_click", run_id=request.run_id)
                 await _click_send_button(session.page)
-                accepted = await wait_for_send_confirmation(session.page, timeout=20.0)
+                accepted = await wait_for_send_confirmation(session.page, timeout=20.0, pre_send_count=pre_send_count)
 
             if not accepted:
                 await session.screenshot_debug("send_not_confirmed")
@@ -157,7 +160,7 @@ class GeminiProviderAdapter(ProviderAdapter):
                     metadata=upload_meta or {},
                 )
 
-            complete = await wait_for_response_complete(session.page, timeout=120.0)
+            complete = await wait_for_response_complete(session.page, timeout=120.0, pre_send_count=pre_send_count)
             if not complete:
                 await session.screenshot_debug("response_timeout")
                 text = await extract_latest_assistant_text(session.page)

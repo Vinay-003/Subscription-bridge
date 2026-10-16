@@ -65,6 +65,8 @@ class ChatGPTProviderAdapter(ProviderAdapter):
                     run_id=request.run_id,
                 )
 
+            if not session.has_active_conversation and isinstance(request.metadata, dict):
+                prompt = str(request.metadata.get("full_prompt") or prompt)
             if not session.has_active_conversation:
                 await self._ensure_fresh_chat(session)
             await _wait_for_composer_ready(session.page)
@@ -194,6 +196,16 @@ class ChatGPTProviderAdapter(ProviderAdapter):
 
     async def _ensure_fresh_chat(self, session: TabSession) -> None:
         page = session.page
+        # Preserve the user's already-open, logged-in ChatGPT tab when it is an
+        # empty composer. If it contains an older conversation, start a clean one.
+        try:
+            current = (page.url or "").lower()
+            if ("chatgpt.com" in current or "chat.openai.com" in current) and await _chatgpt_app_ready(page):
+                if await _count_assistant_messages(page) == 0:
+                    await dismiss_overlays(page)
+                    return
+        except Exception:
+            pass
         await page.goto(CHATGPT_URL, wait_until="domcontentloaded", timeout=30000)
         await asyncio.sleep(0.5)
         deadline = time.monotonic() + 20.0
@@ -288,24 +300,20 @@ async def _type_prompt(page: Any, text: str) -> bool:
 
 
 async def _paste_via_js(page: Any, composer: Any, text: str) -> bool:
-    escaped = text.replace("\\", "\\\\").replace("'", "\\'").replace("\n", "\\n").replace("\r", "\\r")
-    escaped = escaped.replace("</script>", "<\\/script>")
-    script = rf"""
-    () => {{
-        // Try textarea first
+    script = r"""
+    (text) => {
         const textareaSel = '#prompt-textarea, textarea[data-testid="prompt-textarea"], ' +
             '[data-testid="composer"] textarea';
         let el = document.querySelector(textareaSel);
-        if (el) {{
+        if (el) {
             const tag = (el.tagName || '').toLowerCase();
-            if (tag === 'textarea' || tag === 'input') {{
-                el.value = '{escaped}';
-                el.dispatchEvent(new Event('input', {{ bubbles: true }}));
-                el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+            if (tag === 'textarea' || tag === 'input') {
+                el.value = text;
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
                 return true;
-            }}
-        }}
-        // Try contenteditable (ProseMirror)
+            }
+        }
         el = document.querySelector(
             '[data-testid="composer"] [contenteditable="true"], ' +
             'div.ProseMirror[contenteditable="true"], ' +
@@ -314,12 +322,17 @@ async def _paste_via_js(page: Any, composer: Any, text: str) -> bool:
         if (!el) return false;
         el.focus();
         document.execCommand('selectAll');
-        document.execCommand('insertText', false, '{escaped}');
+        document.execCommand('insertText', false, text);
         return true;
-    }}
+    }
     """
     try:
-        return bool(await page.evaluate(script))
+        inserted = bool(await page.evaluate(script, text))
+        if not inserted:
+            return False
+        await asyncio.sleep(0.2)
+        actual = await _get_composer_text(page)
+        return actual == text or actual.strip() == text.strip()
     except Exception:
         return False
 
@@ -509,20 +522,9 @@ async def _submission_activity_report(page: Any) -> dict[str, Any]:
         )) {
             if (visible(el)) { progressVisible = true; break; }
         }
-        const responseSelectors = [
-            '[data-message-author-role="assistant"]',
-            '.markdown',
-            '.prose',
-            '[data-testid*="conversation-turn"]',
-            'article'
-        ];
-        let assistantCount = 0;
-        for (const sel of responseSelectors) {
-            for (const el of document.querySelectorAll(sel)) {
-                if (visible(el)) assistantCount++;
-            }
-        }
-        return {stopVisible, thinkingVisible, progressVisible, assistantCount};
+        const assistantEls = Array.from(document.querySelectorAll('[data-message-author-role="assistant"]')).filter(visible);
+        const stopButton = document.querySelector('button[data-testid="stop-button"]');
+        return {stopVisible: stopVisible || visible(stopButton), thinkingVisible, progressVisible, assistantCount: assistantEls.length};
     }
     """
     try:
