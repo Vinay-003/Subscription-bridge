@@ -19,6 +19,7 @@ async def stream_response(
     has_tools: bool = False,
     tools: list[dict[str, Any]] | None = None,
     tool_choice: str | dict[str, Any] | None = None,
+    include_usage: bool = False,
 ) -> AsyncGenerator[str, None]:
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     now = int(time.time())
@@ -40,6 +41,8 @@ async def stream_response(
             async for chunk in stream_tool_calls(tool_calls, completion_id, now, model):
                 yield chunk
             yield _completion_chunk(completion_id, now, model, finish_reason="tool_calls")
+            if include_usage:
+                yield _usage_chunk(completion_id, now, model, request.prompt, response.text)
             yield "data: [DONE]\n\n"
             return
 
@@ -48,6 +51,8 @@ async def stream_response(
             yield chunk
 
     yield _completion_chunk(completion_id, now, model, finish_reason="stop")
+    if include_usage:
+        yield _usage_chunk(completion_id, now, model, request.prompt, response.text)
     yield "data: [DONE]\n\n"
 
 
@@ -116,7 +121,7 @@ def _completion_chunk(
             )
         ],
     )
-    return f"data: {chunk.model_dump_json()}\n\n"
+    return f"data: {chunk.model_dump_json(exclude_none=True)}\n\n"
 
 
 def _tool_call_start(
@@ -146,7 +151,7 @@ def _tool_call_start(
             )
         ],
     )
-    return f"data: {chunk.model_dump_json()}\n\n"
+    return f"data: {chunk.model_dump_json(exclude_none=True)}\n\n"
 
 
 def _tool_call_arguments_chunk(
@@ -173,4 +178,13 @@ def _tool_call_arguments_chunk(
             )
         ],
     )
-    return f"data: {chunk.model_dump_json()}\n\n"
+    return f"data: {chunk.model_dump_json(exclude_none=True)}\n\n"
+
+
+def _usage_chunk(completion_id: str, created: int, model: str, prompt: str, completion: str) -> str:
+    def estimate(text: str) -> int:
+        return max(1, len(text) // 4) if text else 0
+    usage = {"prompt_tokens": estimate(prompt), "completion_tokens": estimate(completion)}
+    usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
+    payload = {"id": completion_id, "object": "chat.completion.chunk", "created": created, "model": model, "choices": [], "usage": usage}
+    return "data: " + json.dumps(payload, ensure_ascii=False) + "\n\n"

@@ -55,11 +55,12 @@ def convert_messages(
     tools: list[dict[str, Any]] | None = None,
     tool_choice: str | dict[str, Any] | None = None,
     require_json_tools: bool = False,
+    full_history: bool = False,
 ) -> tuple[str, str]:
     system_parts: list[str] = []
     conversation: list[str] = []
 
-    relevant = _tail_after_last_assistant(messages)
+    relevant = list(messages) if full_history else _tail_after_last_assistant(messages)
 
     for msg in messages:
         if msg.role == "system":
@@ -84,7 +85,7 @@ def convert_messages(
                 conversation.append(f"Assistant: {text}")
         elif role == "tool":
             name = f" (call: {msg.tool_call_id})" if hasattr(msg, "tool_call_id") and msg.tool_call_id else ""
-            conversation.append(f"Tool result{name}: {text[:1000]}")
+            conversation.append(f"Tool result{name}: {text[:24000]}")
 
     if tools and require_json_tools:
         tools_prompt = TOOL_CALL_SYSTEM_PROMPT.format(tools_desc=_format_tools_for_prompt(tools))
@@ -138,17 +139,23 @@ def _compact_system_prompt(text: str) -> str:
         return text
 
     parts = [_COMPACT_OPENCODE_PROMPT]
+    environment = _extract_tagged_section(text, "env")
+    if environment:
+        parts.append(environment)
     skills = _extract_skills_section(text)
     if skills:
         parts.append(skills)
     return "\n\n".join(parts)
 
 
+def _extract_tagged_section(text: str, tag: str) -> str:
+    match = re.search(rf"<{re.escape(tag)}(?:\s[^>]*)?>.*?</{re.escape(tag)}>", text, re.DOTALL)
+    return match.group(0).strip() if match else ""
+
 def _extract_skills_section(text: str) -> str:
-    match = re.search(r"<available_skills>.*?</available_skills>", text, re.DOTALL)
-    if not match:
+    block = _extract_tagged_section(text, "available_skills")
+    if not block:
         return ""
-    block = match.group(0).strip()
     reminder = (
         "Skills provide specialized instructions for specific tasks. Load a "
         "skill with the `skill` tool when a task matches its description."

@@ -22,7 +22,7 @@ def _parse_tool_calls_unvalidated(text: str) -> list[ToolCall]:
     run through the shared JSON repair pipeline, and return the first that
     yields at least one valid tool call.
     """
-    text = text.strip()
+    text = re.sub(r"(?im)^\s*copy code\s*\n", "", text).strip()
     if not text:
         return []
 
@@ -84,10 +84,17 @@ def parse_tool_calls(
             forced_name = function["name"]
 
     result: list[ToolCall] = []
+    tool_aliases = {"file_read": "read", "file_write": "write", "file_edit": "edit", "run_command": "bash", "todo_write": "todowrite"}
+    param_aliases = {"path": "filePath", "file_path": "filePath", "old_string": "oldString", "new_string": "newString"}
     for call in raw_calls:
         name = call.function.name
         if schemas and name not in schemas:
-            continue
+            candidate = tool_aliases.get(name)
+            if candidate in schemas:
+                name = candidate
+                call.function.name = name
+            else:
+                continue
         if forced_name and name != forced_name:
             continue
         if schemas:
@@ -97,6 +104,16 @@ def parse_tool_calls(
                 continue
             if not isinstance(args, dict):
                 continue
+            properties = schemas.get(name, {}).get("properties", {})
+            for old_key, new_key in param_aliases.items():
+                if old_key in args and new_key in properties and new_key not in args:
+                    args[new_key] = args.pop(old_key)
+            # OpenCode's bash schema requires a description; synthesize a concise
+            # one only when the request schema explicitly requires it.
+            required = schemas.get(name, {}).get("required", [])
+            if name == "bash" and "description" in required and not args.get("description"):
+                command = str(args.get("command", "command"))
+                args["description"] = ("Run " + " ".join(command.split()))[:120]
             coerced = _coerce_arguments(args, schemas.get(name, {}))
             if coerced is None:
                 continue
@@ -346,8 +363,8 @@ def _decode_loose(raw: str) -> str:
     )
 
 
-_SENTINEL_TOOLCALL = re.compile(r"<<<TOOLCALL:([A-Za-z0-9_.\-]+)>>>(.*?)<<<END>>>", re.DOTALL)
-_SENTINEL_ARG = re.compile(r"<<<ARG:([A-Za-z0-9_.\-]+)>>>\n?")
+_SENTINEL_TOOLCALL = re.compile(r"<<<\s*TOOLCALL\s*:\s*([A-Za-z0-9_.\-]+)\s*>>>(.*?)(?:<<<\s*END\s*>>>|$)", re.DOTALL | re.IGNORECASE)
+_SENTINEL_ARG = re.compile(r"<<<\s*ARG\s*:\s*([A-Za-z0-9_.\-]+)\s*>>>[ \t]*(?:\r?\n)?", re.IGNORECASE)
 
 
 def _parse_sentinel_tool_calls(text: str) -> list[ToolCall]:
@@ -416,7 +433,9 @@ def _tool_calls_from_json_value(data: Any) -> list[ToolCall]:
     if isinstance(data, list):
         return [_to_tool_call(_ensure_function_wrapper(tc)) for tc in data if isinstance(tc, dict)]
     if isinstance(data, dict):
-        if "name" in data or "function" in data:
+        if "function" in data and isinstance(data.get("function"), dict) and isinstance(data["function"].get("name"), str):
+            return [_to_tool_call(data)]
+        if isinstance(data.get("name"), str) and ("arguments" in data or "parameters" in data or "id" in data):
             return [_to_tool_call(_ensure_function_wrapper(data))]
         if "action" in data and isinstance(data["action"], str):
             return [_to_tool_call(_ensure_function_wrapper(_from_action_format(data)))]

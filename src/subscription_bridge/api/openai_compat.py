@@ -199,6 +199,7 @@ async def _resolve_adapter(model_id: str, deps: AppDependencies) -> Any | None:
     return await resolve_adapter(model_id, deps)
 
 
+@router.get("/models")
 @router.get("/v1/models")
 async def list_models(request: Request) -> ModelList:
     import structlog
@@ -218,6 +219,7 @@ async def opencode_well_known() -> JSONResponse:
     })
 
 
+@router.post("/chat/completions")
 @router.post("/v1/chat/completions")
 async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
     import structlog
@@ -276,6 +278,12 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
         tool_choice=req.tool_choice,
         require_json_tools=has_tools,
     )
+    full_history_prompt, _ = _convert_messages(
+        req.messages, req.tools if has_tools else None,
+        tool_choice=req.tool_choice,
+        require_json_tools=has_tools,
+        full_history=True,
+    )
 
     workspace_resolution = resolve_workspace(req, request)
     log.info("workspace_resolved", workspace=workspace_resolution.path, source=workspace_resolution.source)
@@ -297,8 +305,8 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
         system_prompt=system_prompt or None,
         attachments=attachments or None,
         require_json=has_tools,
-        timeout_seconds=max(req.max_tokens // 100, 30),
-        metadata={**provider_metadata(req.model), "isolated_conversation": True},
+        timeout_seconds=max((req.max_completion_tokens or req.max_tokens or 1024) // 100, 30),
+        metadata={**provider_metadata(req.model), "isolated_conversation": True, "full_prompt": full_history_prompt},
     )
 
     if req.stream:
@@ -306,6 +314,7 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
             _stream_response(
                 provider_adapter, provider_req, req.model, has_tools=has_tools,
                 tools=req.tools if has_tools else None, tool_choice=req.tool_choice,
+                include_usage=bool((req.stream_options or {}).get("include_usage")),
             ),
             media_type="text/event-stream",
             headers={
@@ -370,8 +379,9 @@ def _convert_messages(
     tools: list[dict[str, Any]] | None = None,
     tool_choice: str | dict[str, Any] | None = None,
     require_json_tools: bool = False,
+    full_history: bool = False,
 ) -> tuple[str, str]:
-    return convert_messages(messages, tools, tool_choice, require_json_tools)
+    return convert_messages(messages, tools, tool_choice, require_json_tools, full_history)
 
 
 def _extract_text(content: str | list[dict[str, Any]]) -> str:
@@ -401,11 +411,12 @@ async def _stream_response(
     has_tools: bool = False,
     tools: list[dict[str, Any]] | None = None,
     tool_choice: str | dict[str, Any] | None = None,
+    include_usage: bool = False,
 ) -> AsyncGenerator[str, None]:
     try:
         async for chunk in stream_response(
             adapter, request, model, has_tools=has_tools,
-            tools=tools, tool_choice=tool_choice,
+            tools=tools, tool_choice=tool_choice, include_usage=include_usage,
         ):
             yield chunk
     finally:

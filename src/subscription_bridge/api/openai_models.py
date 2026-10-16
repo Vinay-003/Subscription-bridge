@@ -26,8 +26,13 @@ class ToolCall(BaseModel):
 class ChatCompletionRequest(BaseModel):
     model: str = "subscription-bridge-fake"
     messages: list[OpenAIMessage] = Field(default_factory=list, min_length=1)
-    temperature: float = 0.2
-    max_tokens: int = 1024
+    temperature: float | None = 0.2
+    max_tokens: int | None = 1024
+    max_completion_tokens: int | None = None
+    stream_options: dict[str, Any] | None = None
+    parallel_tool_calls: bool | None = None
+    response_format: dict[str, Any] | None = None
+    reasoning_effort: str | None = None
     stream: bool = False
     top_p: float | None = None
     frequency_penalty: float | None = None
