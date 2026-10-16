@@ -83,8 +83,8 @@ class AppDependencies:
         pool = self._session_pool
         pm = self._playwright_manager
 
-        async def _page_factory() -> Any:
-            return await pm.create_page()  # type: ignore[union-attr]
+        async def _page_factory(provider_name: str = "gemini") -> Any:
+            return await pm.create_page(provider_name)  # type: ignore[union-attr]
 
         self._gemini_adapter = GeminiProviderAdapter(
             session_pool=pool,  # type: ignore[arg-type]
@@ -103,8 +103,8 @@ class AppDependencies:
         pool = self._session_pool
         pm = self._playwright_manager
 
-        async def _page_factory() -> Any:
-            return await pm.create_page()  # type: ignore[union-attr]
+        async def _page_factory(provider_name: str = "chatgpt") -> Any:
+            return await pm.create_page(provider_name)  # type: ignore[union-attr]
 
         from subscription_bridge.providers.chatgpt import ChatGPTProviderAdapter
 

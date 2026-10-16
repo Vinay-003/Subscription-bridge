@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
 from enum import StrEnum
@@ -30,6 +31,9 @@ class TabSession:
         self.last_used_at: float = self.created_at
         self.state: SessionState = SessionState.IDLE
         self.current_run_id: str | None = None
+        # Stable owner survives release; current_run_id describes only active work.
+        self.owner_run_id: str | None = None
+        self.operation_lock = asyncio.Lock()
         self.has_active_conversation: bool = False
         self.selected_model_variant: str | None = None
 
@@ -37,9 +41,11 @@ class TabSession:
     def page(self) -> Any:
         return self._page
 
-    def mark_busy(self, run_id: str) -> None:
+    def mark_busy(self, run_id: str, *, replace_owner: bool = False) -> None:
         self.state = SessionState.BUSY
         self.current_run_id = run_id
+        if replace_owner or self.owner_run_id is None:
+            self.owner_run_id = run_id
         self.last_used_at = time.monotonic()
 
     def mark_idle(self) -> None:
@@ -59,6 +65,9 @@ class TabSession:
     async def close(self) -> None:
         self.state = SessionState.CLOSED
         self.current_run_id = None
+        self.owner_run_id = None
+        self.has_active_conversation = False
+        self.selected_model_variant = None
         self.last_used_at = time.monotonic()
         try:
             await self._page.close()
@@ -103,5 +112,5 @@ class TabSession:
     def __repr__(self) -> str:
         return (
             f"TabSession(id={self.session_id}, provider={self.provider_name}, "
-            f"state={self.state.value}, run={self.current_run_id})"
+            f"state={self.state.value}, run={self.current_run_id}, owner={self.owner_run_id})"
         )

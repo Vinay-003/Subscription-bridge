@@ -44,3 +44,30 @@ def test_playwright_manager_create_page_before_start() -> None:
         import asyncio
 
         asyncio.run(pm.create_page())
+
+
+@pytest.mark.asyncio
+async def test_cdp_create_page_claims_existing_provider_tab_before_opening_new_tab() -> None:
+    class FakePage:
+        def __init__(self, url: str) -> None:
+            self.url = url
+
+    class FakeContext:
+        def __init__(self) -> None:
+            self.pages = [FakePage("https://chatgpt.com/c/visible-conversation")]
+
+        async def new_page(self) -> FakePage:
+            page = FakePage("about:blank")
+            self.pages.append(page)
+            return page
+
+    pm = PlaywrightManager({"browser": {"mode": "cdp"}})
+    pm._mode = "cdp"
+    pm._context = FakeContext()
+
+    first = await pm.create_page("chatgpt")
+    second = await pm.create_page("chatgpt")
+
+    assert first.url == "https://chatgpt.com/c/visible-conversation"
+    assert second is not first
+    assert len(pm.context.pages) == 2

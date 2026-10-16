@@ -17,6 +17,8 @@ class PlaywrightManager:
         self._playwright: Any = None
         self._browser: Any = None
         self._context: Any = None
+        self._claimed_pages: set[int] = set()
+        self._mode: str = "managed"
 
     @property
     def is_launched(self) -> bool:
@@ -33,6 +35,7 @@ class PlaywrightManager:
     async def start(self) -> Any:
         browser_config = self._config.get("browser", {})
         mode = str(browser_config.get("mode", "managed")).lower()
+        self._mode = mode
 
         if mode not in BROWSER_MODES:
             msg = f"Invalid browser mode {mode!r}. Must be one of: {', '.join(sorted(BROWSER_MODES))}"
@@ -134,11 +137,51 @@ class PlaywrightManager:
 
         return self._context
 
-    async def create_page(self) -> Any:
+    async def create_page(self, provider_name: str | None = None) -> Any:
+        """Return a provider tab, preferring an existing unclaimed tab in CDP mode.
+
+        The first session for a provider reuses the user's already-open provider tab.
+        Subsequent isolated conversations get their own tab instead of sharing history.
+        """
         if self._context is None:
             msg = "Browser not started. Call start() first."
             raise PlaywrightLaunchError(msg)
+
+        pages = list(self._context.pages)
+        host_needles = {
+            "chatgpt": ("chatgpt.com", "chat.openai.com"),
+            "gemini": ("gemini.google.com",),
+            "claude": ("claude.ai",),
+        }.get((provider_name or "").lower(), ())
+
+        # Reuse an exact provider tab first, but never hand one tab to two sessions.
+        if self._mode == "cdp" and host_needles:
+            for page in pages:
+                if id(page) in self._claimed_pages:
+                    continue
+                try:
+                    url = str(page.url or "").lower()
+                except Exception:
+                    url = ""
+                if any(host in url for host in host_needles):
+                    self._claimed_pages.add(id(page))
+                    return page
+
+        # For managed mode, let the first session claim the initial blank tab.
+        if self._mode == "managed":
+            for page in pages:
+                if id(page) in self._claimed_pages:
+                    continue
+                try:
+                    url = str(page.url or "").lower()
+                except Exception:
+                    url = ""
+                if not url or url == "about:blank":
+                    self._claimed_pages.add(id(page))
+                    return page
+
         page = await self._context.new_page()
+        self._claimed_pages.add(id(page))
         return page
 
     async def stop(self) -> None:
@@ -148,6 +191,7 @@ class PlaywrightManager:
             except Exception:
                 pass
             self._context = None
+        self._claimed_pages.clear()
 
         if self._browser is not None:
             try:

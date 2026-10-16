@@ -30,6 +30,8 @@ class ChatGPTProviderAdapter(ProviderAdapter):
 
     async def create_session(self) -> str:
         session = await self._pool.acquire("chatgpt", "", self._page_factory)
+        # The caller receives an idle browser session; no request is running yet.
+        await self._pool.release(session.session_id)
         return session.session_id
 
     async def send_prompt(self, request: ProviderRequest) -> ProviderResponse:
@@ -39,9 +41,12 @@ class ChatGPTProviderAdapter(ProviderAdapter):
         prompt = request.prompt
 
         try:
-            session = await self._pool.acquire("chatgpt", request.run_id, self._page_factory)
+            session = await self._pool.acquire(
+                "chatgpt", request.run_id, self._page_factory,
+                allow_cross_run_reuse=not bool((request.metadata or {}).get("isolated_conversation")),
+            )
 
-            if request.system_prompt:
+            if request.system_prompt and not session.has_active_conversation:
                 prompt = request.system_prompt + "\n\n" + prompt
 
             requested_variant = _extract_model_variant(request)
@@ -60,7 +65,8 @@ class ChatGPTProviderAdapter(ProviderAdapter):
                     run_id=request.run_id,
                 )
 
-            await self._ensure_fresh_chat(session)
+            if not session.has_active_conversation:
+                await self._ensure_fresh_chat(session)
             await _wait_for_composer_ready(session.page)
             pre_send_count = await _count_assistant_messages(session.page)
 
@@ -101,6 +107,7 @@ class ChatGPTProviderAdapter(ProviderAdapter):
                 await session.screenshot_debug("response_timeout")
                 text = await _extract_latest_assistant_text(session.page, pre_send_count)
                 if text:
+                    session.has_active_conversation = True
                     return ProviderResponse(
                         provider=self.name, text=text, raw_text=text, success=True,
                         latency_seconds=time.monotonic() - start,
@@ -123,6 +130,7 @@ class ChatGPTProviderAdapter(ProviderAdapter):
                     metadata=upload_meta or {},
                 )
 
+            session.has_active_conversation = True
             return ProviderResponse(
                 provider=self.name, text=text, raw_text=text, success=True,
                 latency_seconds=time.monotonic() - start,

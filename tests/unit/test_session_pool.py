@@ -113,6 +113,7 @@ async def test_release_nonexistent(pool: SessionPool) -> None:
 @pytest.mark.asyncio
 async def test_reset_session(pool: SessionPool) -> None:
     session = await pool.acquire("test", "run-001", _page_factory)
+    await pool.release(session.session_id)
     await pool.reset(session.session_id)
     assert session.state == SessionState.IDLE
 
@@ -164,3 +165,80 @@ def test_initial_counts(pool: SessionPool) -> None:
     assert pool.active_count == 0
     assert pool.idle_count == 0
     assert pool.total_count == 0
+
+
+@pytest.mark.asyncio
+async def test_isolated_conversations_do_not_reuse_another_conversation_tab(pool: SessionPool) -> None:
+    first = await pool.acquire("test", "conversation-a", _page_factory, allow_cross_run_reuse=False)
+    await pool.release(first.session_id)
+
+    second = await pool.acquire("test", "conversation-b", _page_factory, allow_cross_run_reuse=False)
+
+    assert second.session_id != first.session_id
+    assert pool.total_count == 2
+    assert pool.get_session(first.session_id).owner_run_id == "conversation-a"
+    assert second.owner_run_id == "conversation-b"
+    await pool.release(second.session_id)
+
+
+@pytest.mark.asyncio
+async def test_isolated_conversation_reacquires_its_own_idle_tab(pool: SessionPool) -> None:
+    first = await pool.acquire("test", "conversation-a", _page_factory, allow_cross_run_reuse=False)
+    first.has_active_conversation = True
+    first.selected_model_variant = "model-a"
+    await pool.release(first.session_id)
+
+    reacquired = await pool.acquire("test", "conversation-a", _page_factory, allow_cross_run_reuse=False)
+
+    assert reacquired.session_id == first.session_id
+    assert reacquired.has_active_conversation is True
+    assert reacquired.selected_model_variant == "model-a"
+    await pool.release(reacquired.session_id)
+
+
+@pytest.mark.asyncio
+async def test_reset_clears_owner_and_browser_conversation_state(pool: SessionPool) -> None:
+    session = await pool.acquire("test", "conversation-a", _page_factory)
+    session.has_active_conversation = True
+    session.selected_model_variant = "model-a"
+    await pool.release(session.session_id)
+
+    await pool.reset(session.session_id)
+
+    assert session.owner_run_id is None
+    assert session.has_active_conversation is False
+    assert session.selected_model_variant is None
+
+
+@pytest.mark.asyncio
+async def test_concurrent_requests_for_same_conversation_are_serialized(pool: SessionPool) -> None:
+    import asyncio
+
+    first = await pool.acquire("test", "same-conversation", _page_factory, allow_cross_run_reuse=False)
+    pending = asyncio.create_task(
+        pool.acquire("test", "same-conversation", _page_factory, allow_cross_run_reuse=False)
+    )
+    await asyncio.sleep(0.01)
+    assert not pending.done()
+
+    await pool.release(first.session_id)
+    second = await pending
+    assert second.session_id == first.session_id
+    assert pool.total_count == 1
+    await pool.release(second.session_id)
+
+
+@pytest.mark.asyncio
+async def test_isolated_pool_evicts_lru_idle_session_at_capacity() -> None:
+    pool = SessionPool(max_sessions=2, session_ttl_seconds=600)
+    first = await pool.acquire("test", "conversation-a", _page_factory, allow_cross_run_reuse=False)
+    await pool.release(first.session_id)
+    second = await pool.acquire("test", "conversation-b", _page_factory, allow_cross_run_reuse=False)
+    await pool.release(second.session_id)
+
+    third = await pool.acquire("test", "conversation-c", _page_factory, allow_cross_run_reuse=False)
+
+    assert pool.total_count == 2
+    assert pool.get_session(first.session_id) is None
+    assert third.owner_run_id == "conversation-c"
+    await pool.release(third.session_id)

@@ -54,6 +54,8 @@ class GeminiProviderAdapter(ProviderAdapter):
 
     async def create_session(self) -> str:
         session = await self._pool.acquire("gemini", "", self._page_factory)
+        # The caller receives an idle browser session; no request is running yet.
+        await self._pool.release(session.session_id)
         return session.session_id
 
     async def send_prompt(self, request: ProviderRequest) -> ProviderResponse:
@@ -64,7 +66,10 @@ class GeminiProviderAdapter(ProviderAdapter):
         logger = get_logger("provider.gemini")
 
         try:
-            session = await self._pool.acquire("gemini", request.run_id, self._page_factory)
+            session = await self._pool.acquire(
+                "gemini", request.run_id, self._page_factory,
+                allow_cross_run_reuse=not bool((request.metadata or {}).get("isolated_conversation")),
+            )
 
             # Only inject the (potentially huge) system prompt on the first turn of
             # a conversation. On continuations the browser chat already holds it in
