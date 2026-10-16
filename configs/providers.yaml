@@ -21,12 +21,12 @@ providers:
     priority: 10
 
   chatgpt:
-    enabled: false
+    enabled: true
     capabilities:
       - text_chat
       - code_reasoning
     default_model: "GPT-4"
-    url: "https://chat.openai.com"
+    url: "https://chatgpt.com"
     priority: 20
 
   claude:
