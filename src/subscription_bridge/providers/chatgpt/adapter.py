@@ -378,7 +378,11 @@ async def _wait_for_send_confirmation(
         if not composer_text.strip():
             return True
         report = await _submission_activity_report(page)
-        if report.get("stopVisible") or report.get("thinkingVisible"):
+        if (
+            report.get("stopVisible")
+            or report.get("thinkingVisible")
+            or int(report.get("streamingWords", 0)) > 0
+        ):
             return True
         current_count = int(report.get("assistantCount", 0))
         if current_count > pre_send_count:
@@ -391,27 +395,43 @@ async def _wait_for_response_complete(
     page: Any, timeout: float = 180.0, pre_send_count: int = 0,
 ) -> bool:
     deadline = time.monotonic() + timeout
-    last_count = 0
+    last_len = -1
     stable_cycles = 0
+    # Stream-word spans can linger as DOM artifacts after ChatGPT marks the
+    # response complete. If text length is stable long enough, treat as done
+    # even if stream words remain.
+    stable_with_stream = 0
     while time.monotonic() < deadline:
         report = await _submission_activity_report(page)
         current_count = int(report.get("assistantCount", 0))
-        is_generating = report.get("stopVisible") or report.get("progressVisible")
+        streaming = int(report.get("streamingWords", 0))
+        is_generating = (
+            bool(report.get("stopVisible"))
+            or bool(report.get("progressVisible"))
+        )
 
         target_reached = current_count > pre_send_count
+        current_len = int(report.get("lastTextLen", 0))
 
-        if not is_generating and target_reached:
-            if current_count != last_count:
+        if target_reached and current_len > 0:
+            if current_len != last_len:
                 stable_cycles = 0
+                stable_with_stream = 0
             else:
                 stable_cycles += 1
-                if stable_cycles >= 8:
+                if streaming > 0:
+                    stable_with_stream += 1
+                # Clean completion: no activity flags, text stable 4s
+                if not is_generating and streaming == 0 and stable_cycles >= 8:
                     return True
-            last_count = current_count
+                # Fallback: text stable 10s even with lingering stream words
+                if stable_with_stream >= 20:
+                    return True
+            last_len = current_len
         else:
             stable_cycles = 0
-            if not target_reached:
-                last_count = current_count
+            stable_with_stream = 0
+            last_len = current_len if current_len else last_len
 
         await asyncio.sleep(0.5)
     return False
@@ -429,22 +449,75 @@ async def _extract_latest_assistant_text(page: Any, pre_send_count: int = 0) -> 
             '[data-message-author-role="assistant"]',
             '[data-conversation-role="assistant"]',
         ];
+
+        function visible(el) {
+            const r = el.getBoundingClientRect();
+            const s = getComputedStyle(el);
+            return r.width > 0 && r.height > 0 &&
+                   s.display !== 'none' && s.visibility !== 'hidden';
+        }
+
+        // Extract text from a new-UI code block: header is marked
+        // data-markdown-copy="exclude" (language label + Run); the .grid
+        // sibling holds the actual code and preserves indentation via innerText.
+        function codeBlockText(block) {
+            const grid = block.querySelector('.grid');
+            if (grid) {
+                const t = (grid.innerText || '').trim();
+                if (t) return t;
+            }
+            // Fallback: clone block, strip excluded header, take innerText
+            const clone = block.cloneNode(true);
+            clone.querySelectorAll('[data-markdown-copy="exclude"]').forEach(n => n.remove());
+            return (clone.innerText || clone.textContent || '').trim();
+        }
+
+        function blockText(root) {
+            // New ChatGPT UI: code blocks use [data-code-block="true"] with a
+            // .grid content area. Prefer those (innerTex preserves indentation).
+            const codeBlocks = Array.from(root.querySelectorAll('[data-code-block="true"]'))
+                .filter(visible);
+            if (codeBlocks.length) {
+                const parts = codeBlocks.map(codeBlockText).filter(Boolean);
+                if (parts.length) return parts.join('\n\n');
+            }
+            // Classic markdown pre/code
+            const pres = Array.from(root.querySelectorAll('pre')).filter(visible);
+            if (pres.length) {
+                const parts = pres.map(p => (p.innerText || p.textContent || '').trim()).filter(Boolean);
+                if (parts.length) return parts.join('\n\n');
+            }
+            // Prose blocks: join with newlines so structure is preserved.
+            // textContent alone concatenates <p> siblings with no separator;
+            // innerText collapses indentation inside streamed word-spans.
+            const blocks = root.querySelectorAll(
+                'p, li, h1, h2, h3, h4, h5, h6, blockquote'
+            );
+            if (blocks.length) {
+                const parts = [];
+                for (const b of blocks) {
+                    if (b.closest('[data-code-block="true"]')) continue;
+                    if (b.closest('pre') && b.tagName !== 'PRE') continue;
+                    const t = (b.innerText || b.textContent || '').trim();
+                    if (t) parts.push(t);
+                }
+                if (parts.length) return parts.join('\n\n');
+            }
+            // Fallback: walk top-level text nodes / spans preserving whitespace
+            return root.textContent || root.innerText || '';
+        }
+
         for (const sel of selectors) {
             const elements = Array.from(document.querySelectorAll(sel));
-            const visible = elements.filter(el => {
-                const r = el.getBoundingClientRect();
-                const s = getComputedStyle(el);
-                return r.width > 0 && r.height > 0 &&
-                       s.display !== 'none' && s.visibility !== 'hidden';
-            });
-            if (!visible.length) continue;
-            const lastEl = visible[visible.length - 1];
+            const vis = elements.filter(visible);
+            if (!vis.length) continue;
+            const lastEl = vis[vis.length - 1];
             // Prefer nested markdown content inside a conversation-role wrapper
             const nested = lastEl.querySelector(
                 '[data-markdown-text-style="assistant-message"], [class*="DilResponseRoot"], .markdown, .prose'
             );
             const source = nested || lastEl;
-            const text = (source.innerText || source.textContent || '').trim();
+            const text = blockText(source).trim();
             if (text) return text;
         }
         return '';
@@ -471,7 +544,12 @@ async def _extract_latest_assistant_text(page: Any, pre_send_count: int = 0) -> 
             style.display === 'none' || style.visibility === 'hidden') {
             return '';
         }
-        return lastEl.innerText || lastEl.textContent || '';
+        const pre = lastEl.querySelector('pre');
+        if (pre) {
+            const codeText = (pre.innerText || pre.textContent || '').trim();
+            if (codeText) return codeText;
+        }
+        return lastEl.textContent || lastEl.innerText || '';
     }
                 """,
                 selector,
@@ -551,7 +629,17 @@ async def _submission_activity_report(page: Any) -> dict[str, Any]:
             assistantEls = Array.from(document.querySelectorAll(sel)).filter(visible);
             if (assistantEls.length) break;
         }
-        // Turn-state: complete means generation finished
+        // Streaming word spans mean the model is still writing.
+        // Scope to the LATEST assistant message only — leftover stream words
+        // from a prior stalled response must not block completion detection.
+        let streamingWords = 0;
+        let lastTextLen = 0;
+        if (assistantEls.length) {
+            const lastEl = assistantEls[assistantEls.length - 1];
+            streamingWords = lastEl.querySelectorAll('[data-d-stream-word]').length;
+            lastTextLen = (lastEl.textContent || '').length;
+        }
+        // Turn-state: incomplete means generation still running
         const incompleteTurns = Array.from(document.querySelectorAll(
             '[data-talvt-turn-state="generating"],' +
             ' [data-talvt-turn-state="thinking"],' +
@@ -561,10 +649,15 @@ async def _submission_activity_report(page: Any) -> dict[str, Any]:
             'button[data-testid="stop-button"], button[aria-label*="Stop"], button[aria-label*="stop"]'
         );
         return {
+            // Stop button / incomplete turns only — streamingWords is reported
+            // separately so the wait loop can distinguish active streaming from
+            // lingering DOM artifacts after ChatGPT marks the response complete.
             stopVisible: stopVisible || visible(stopButton) || incompleteTurns.length > 0,
             thinkingVisible,
             progressVisible,
             assistantCount: assistantEls.length,
+            streamingWords,
+            lastTextLen,
         };
     }
     """

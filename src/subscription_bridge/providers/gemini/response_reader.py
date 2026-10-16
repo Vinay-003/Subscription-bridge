@@ -156,6 +156,17 @@ def _clean_assistant_text(text: str) -> str:
     for prefix in ["Gemini said", "Gemini said\n", "Gemini said "]:
         if result.startswith(prefix):
             result = result[len(prefix):].strip()
+    # Code-block language label leaked as a bare first line (e.g. "Python\n")
+    # when the response starts with a fenced code block.
+    code_start = (
+        r"(?:def |class |import |from |const |function |public |package |fn |func )"
+    )
+    result = re.sub(
+        rf"(?im)^(python|javascript|typescript|java|c\+\+|go|rust|sql|bash|json|yaml|html|css)\s*\n(?=\s*{code_start})",
+        "",
+        result,
+        count=1,
+    )
     return result
 
 
