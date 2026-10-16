@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import signal
 from pathlib import Path
 
 from subscription_bridge.core.errors import DangerousCommandError
@@ -59,20 +60,30 @@ class BashTool(Tool):
         env["PWD"] = str(Path(workspace).expanduser().resolve())
 
         try:
-            proc = await asyncio.create_subprocess_shell(
-                command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=str(Path(workspace).expanduser().resolve()),
-                env=env,
-            )
+            process_options = {
+                "stdout": asyncio.subprocess.PIPE,
+                "stderr": asyncio.subprocess.PIPE,
+                "cwd": str(Path(workspace).expanduser().resolve()),
+                "env": env,
+            }
+            if os.name == "posix":
+                # A shell command may spawn children that inherit its output pipes.
+                # A separate process group lets timeout handling kill the whole tree.
+                process_options["start_new_session"] = True
+            proc = await asyncio.create_subprocess_shell(command, **process_options)
 
             try:
                 stdout_bytes, stderr_bytes = await asyncio.wait_for(
                     proc.communicate(), timeout=timeout
                 )
             except TimeoutError:
-                proc.kill()
+                try:
+                    if os.name == "posix":
+                        os.killpg(proc.pid, signal.SIGKILL)
+                    else:
+                        proc.kill()
+                except ProcessLookupError:
+                    pass
                 await proc.wait()
                 return ToolResult(
                     name=self.name,
