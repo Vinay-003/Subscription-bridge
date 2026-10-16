@@ -285,6 +285,9 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
         full_history=True,
     )
 
+    if isinstance(req.response_format, dict) and req.response_format.get("type") == "json_object":
+        system_prompt = (system_prompt or "") + "\n\nOUTPUT FORMAT: Return only a valid JSON object. Do not wrap it in Markdown fences or add commentary."
+
     workspace_resolution = resolve_workspace(req, request)
     log.info("workspace_resolved", workspace=workspace_resolution.path, source=workspace_resolution.source)
 
@@ -315,6 +318,7 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
                 provider_adapter, provider_req, req.model, has_tools=has_tools,
                 tools=req.tools if has_tools else None, tool_choice=req.tool_choice,
                 include_usage=bool((req.stream_options or {}).get("include_usage")),
+                parallel_tool_calls=req.parallel_tool_calls,
             ),
             media_type="text/event-stream",
             headers={
@@ -335,6 +339,8 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
         return _error_json(response.error or "Provider error", code="provider_error", status_code=502)
 
     parsed_tool_calls = parse_tool_calls(response.text, tools=req.tools, tool_choice=req.tool_choice) if has_tools else []
+    if req.parallel_tool_calls is False:
+        parsed_tool_calls = parsed_tool_calls[:1]
     if parsed_tool_calls:
         seen_ids: set[str] = set()
         for idx, tool_call in enumerate(parsed_tool_calls, start=1):
@@ -412,11 +418,13 @@ async def _stream_response(
     tools: list[dict[str, Any]] | None = None,
     tool_choice: str | dict[str, Any] | None = None,
     include_usage: bool = False,
+    parallel_tool_calls: bool | None = None,
 ) -> AsyncGenerator[str, None]:
     try:
         async for chunk in stream_response(
             adapter, request, model, has_tools=has_tools,
             tools=tools, tool_choice=tool_choice, include_usage=include_usage,
+            parallel_tool_calls=parallel_tool_calls,
         ):
             yield chunk
     finally:

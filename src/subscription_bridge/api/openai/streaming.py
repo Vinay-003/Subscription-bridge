@@ -20,6 +20,7 @@ async def stream_response(
     tools: list[dict[str, Any]] | None = None,
     tool_choice: str | dict[str, Any] | None = None,
     include_usage: bool = False,
+    parallel_tool_calls: bool | None = None,
 ) -> AsyncGenerator[str, None]:
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     now = int(time.time())
@@ -38,6 +39,8 @@ async def stream_response(
     if has_tools and response.text:
         tool_calls = parse_tool_calls(response.text, tools=tools, tool_choice=tool_choice)
         if tool_calls:
+            if parallel_tool_calls is False:
+                tool_calls = tool_calls[:1]
             async for chunk in stream_tool_calls(tool_calls, completion_id, now, model):
                 yield chunk
             yield _completion_chunk(completion_id, now, model, finish_reason="tool_calls")
