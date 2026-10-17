@@ -51,16 +51,43 @@ class ChatGPTProviderAdapter(ProviderAdapter):
             if (request.metadata or {}).get("restart_conversation"):
                 session.has_active_conversation = False
 
+            # The catalog model changed (e.g. chatgpt -> chatgpt-thinking). Each
+            # model brings its own system prompt, and the browser tab may be
+            # reused across models, so restart the transcript instead of appending
+            # a foreign system prompt.
+            requested_model = str((request.metadata or {}).get("model_id") or "")
+            if (
+                requested_model
+                and session.has_active_conversation
+                and session.served_model_id
+                and session.served_model_id != requested_model
+            ):
+                logger.info(
+                    "model_change_restart",
+                    previous=session.served_model_id,
+                    current=requested_model,
+                    run_id=request.run_id,
+                )
+                session.has_active_conversation = False
+            if requested_model:
+                session.served_model_id = requested_model
+
+            # The system/tool instructions are injected once per browser chat.
             if request.system_prompt and not session.has_active_conversation:
                 prompt = request.system_prompt + "\n\n" + prompt
-
-            requested_variant = _extract_model_variant(request)
+            # On a fresh/reset browser chat, restore the full OpenCode transcript;
+            # on a continuing browser chat, send only the incremental tail.
             if not session.has_active_conversation and isinstance(request.metadata, dict):
                 prompt = str(request.metadata.get("full_prompt") or prompt)
+                if request.system_prompt:
+                    # full_prompt has no system message; prepend it after the
+                    # transcript override so the system instructions survive.
+                    prompt = request.system_prompt + "\n\n" + prompt
             if not session.has_active_conversation:
                 await self._ensure_fresh_chat(session)
             await _wait_for_composer_ready(session.page)
 
+            requested_variant = _extract_model_variant(request)
             if requested_variant:
                 logger.info(
                     "model_switch_requested",

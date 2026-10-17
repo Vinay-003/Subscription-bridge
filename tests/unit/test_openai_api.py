@@ -247,6 +247,43 @@ def test_chat_completions_wires_delta_restart_and_thinking_metadata(
     assert "thinking_level" not in req3.metadata
 
 
+def test_chat_completions_passes_model_id_in_metadata(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from subscription_bridge.api import openai_compat as oc
+    from subscription_bridge.providers.base import ProviderResponse
+
+    captured: list[object] = []
+
+    class CaptureAdapter:
+        name = "fake"
+
+        async def send_prompt(self, request: object) -> ProviderResponse:
+            captured.append(request)
+            return ProviderResponse(
+                provider="fake", text="ok", raw_text="ok", success=True, latency_seconds=0.0,
+            )
+
+    async def fake_resolve(model_id: str, deps: object) -> CaptureAdapter:
+        return CaptureAdapter()
+
+    monkeypatch.setattr(oc, "resolve_adapter", fake_resolve)
+
+    r = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "subscription-bridge-fake",
+            "messages": [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "hi"},
+            ],
+        },
+        headers={"x-opencode-session": "sess-model-id-metadata"},
+    )
+    assert r.status_code == 200
+    assert captured[-1].metadata["model_id"] == "subscription-bridge-fake"
+
+
 # ── Tool call parsing tests ──────────────────────────────────────────────────
 
 

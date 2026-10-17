@@ -144,9 +144,14 @@ def build_native_tool_definitions() -> list[dict[str, Any]]:
 
 
 def strip_provider_prefix(model_id: str) -> str:
-    if "/" in model_id:
-        return model_id.split("/", 1)[1]
-    return model_id
+    """Drop a client-side provider prefix from a model id.
+
+    OpenCode's OpenAI-compatible driver prefixes the catalog id with the
+    provider name, so it sends ``subscription-bridge/gemini-flash`` while the
+    catalog and alias table store bare ids like ``gemini-flash``. Strip at most
+    two leading segments so a bare id is returned untouched.
+    """
+    return model_id.split("/", 1)[-1].split("/", 1)[-1]
 
 
 def resolve_model_alias(model_id: str) -> str:

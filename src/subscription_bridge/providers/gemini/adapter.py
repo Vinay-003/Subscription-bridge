@@ -77,6 +77,26 @@ class GeminiProviderAdapter(ProviderAdapter):
             if (request.metadata or {}).get("restart_conversation"):
                 session.has_active_conversation = False
 
+            # The catalog model changed (e.g. flash -> pro). Each model brings its
+            # own system prompt, and the browser tab may be reused across models,
+            # so restart the transcript instead of appending a foreign system prompt.
+            requested_model = str((request.metadata or {}).get("model_id") or "")
+            if (
+                requested_model
+                and session.has_active_conversation
+                and session.served_model_id
+                and session.served_model_id != requested_model
+            ):
+                logger.info(
+                    "model_change_restart",
+                    previous=session.served_model_id,
+                    current=requested_model,
+                    run_id=request.run_id,
+                )
+                session.has_active_conversation = False
+            if requested_model:
+                session.served_model_id = requested_model
+
             # On a fresh/reset browser chat, restore the full OpenCode transcript;
             # on a continuing browser chat, send only the incremental tail.
             if not session.has_active_conversation and isinstance(request.metadata, dict):

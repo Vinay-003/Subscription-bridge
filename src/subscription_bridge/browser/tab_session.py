@@ -37,6 +37,12 @@ class TabSession:
         self.has_active_conversation: bool = False
         self.selected_model_variant: str | None = None
         self.thinking_level: str | None = None
+        # The catalog model id that last drove this browser conversation. Gemini
+        # and ChatGPT sessions are separate, but a single provider tab can be
+        # reused across catalog models (e.g. chatgpt -> chatgpt-thinking). Each
+        # model brings its own system prompt, so a model change must restart the
+        # transcript rather than append to the old one.
+        self.served_model_id: str | None = None
 
     @property
     def page(self) -> Any:

@@ -130,6 +130,26 @@ def test_conversation_id_does_not_change_as_tool_results_are_added() -> None:
     assert _conversation_id(first) == _conversation_id(next_turn)
 
 
+def test_conversation_id_changes_when_model_changes() -> None:
+    messages = [
+        OpenAIMessage(role="system", content="system instructions"),
+        OpenAIMessage(role="user", content="Fix the app"),
+    ]
+    chatgpt = _conversation_id(messages, model="subscription-bridge-chatgpt")
+    gemini = _conversation_id(messages, model="subscription-bridge-gemini-flash")
+    assert chatgpt != gemini
+
+
+def test_strip_provider_prefix_handles_opencode_slash_form() -> None:
+    from subscription_bridge.api.openai.model_catalog import strip_provider_prefix
+
+    assert strip_provider_prefix("subscription-bridge/gemini-flash") == "gemini-flash"
+    assert strip_provider_prefix("openai/some-model") == "some-model"
+    assert strip_provider_prefix("subscription-bridge-gemini-flash") == "subscription-bridge-gemini-flash"
+    assert strip_provider_prefix("subscription-bridge-chatgpt") == "subscription-bridge-chatgpt"
+    assert strip_provider_prefix("gemini-flash") == "gemini-flash"
+
+
 def test_converter_includes_full_conversation_history() -> None:
     messages = [
         OpenAIMessage(role="system", content="system instructions"),

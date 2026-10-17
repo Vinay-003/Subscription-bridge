@@ -182,11 +182,17 @@ def _resolve_agent_answer(result: Any) -> str:
     return "No answer generated"
 
 
-def _conversation_id(messages: list[Any], request: Request | None = None) -> str:
+def _conversation_id(
+    messages: list[Any],
+    request: Request | None = None,
+    model: str | None = None,
+) -> str:
     """Return a stable browser-conversation key without hashing mutable history.
 
     Prefer a host session ID when available. Otherwise use the complete system
     prompt and first user message, not a short prefix of the first few messages.
+    The model id is folded into the fallback digest so a model switch restarts
+    the conversation instead of appending to the previous model's transcript.
     """
     if request is not None:
         for header in ("x-opencode-session", "x-opencode-session-id", "x-session-id"):
@@ -205,7 +211,7 @@ def _conversation_id(messages: list[Any], request: Request | None = None) -> str
             system_text.append(text)
         elif role == "user" and text.strip() and not first_user:
             first_user = text
-    identity = "\0".join([*system_text, first_user])
+    identity = "\0".join([model or "", *system_text, first_user])
     digest = hashlib.sha256(identity.encode("utf-8", errors="replace")).hexdigest()[:24]
     return f"conv-{digest}"
 
@@ -328,7 +334,7 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
         )
 
     has_tools = bool(req.tools) and req.tool_choice != "none"
-    conversation_id = _conversation_id(req.messages, request)
+    conversation_id = _conversation_id(req.messages, request, model=req.model)
     # Only forward NEW messages to the browser. The browser chat already has
     # prior turns; re-sending full history causes double context bloat.
     delta_msgs, history_rewritten = _delta_messages(req.messages, conversation_id)
@@ -365,6 +371,7 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
         **provider_metadata(req.model),
         "isolated_conversation": True,
         "full_prompt": full_prompt,
+        "model_id": req.model,
     }
     if history_rewritten:
         provider_metadata_dict["restart_conversation"] = True
