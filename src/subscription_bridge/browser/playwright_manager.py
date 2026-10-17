@@ -46,7 +46,7 @@ class PlaywrightManager:
         return await self._start_managed(browser_config)
 
     async def _start_cdp(self, browser_config: dict[str, Any]) -> Any:
-        cdp_url = str(browser_config.get("cdp_url", "http://127.0.0.1:9333"))
+        cdp_url = str(browser_config.get("cdp_url", "http://127.0.0.1:9555"))
 
         self._verify_cdp_reachable(cdp_url)
 
@@ -237,7 +237,7 @@ class PlaywrightManager:
 
         parsed = urlparse(cdp_url)
         host = parsed.hostname or "127.0.0.1"
-        port = parsed.port or 9333
+        port = parsed.port or 9555
 
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

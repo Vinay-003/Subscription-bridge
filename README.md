@@ -100,69 +100,81 @@ pytest tests/ -v
 
 ---
 
-## Setup Browser for Gemini
+## Start Everything (Chrome + Bridge Server)
 
-### CDP Mode (only way that works)
+### Option 1: One-command script
+
+```bash
+# Start Chrome (CDP on port 9555) + bridge server (port 8787)
+./start.sh both        # or: ./start.sh gemini | ./start.sh chatgpt
+
+# Stop everything
+./stop.sh
+```
+
+### Option 2: Manual commands
+
+Open **two terminals** — one for Chrome, one for the bridge server.
+
+**Terminal 1 — Chrome with CDP (port 9555):**
 
 ```bash
 google-chrome \
-  --remote-debugging-port=9333 \
+  --remote-debugging-port=9555 \
+  --remote-debugging-address=127.0.0.1 \
   --user-data-dir="$HOME/.subscription-bridge/chrome-profile" \
   --no-first-run \
-  --no-default-browser-check
+  --no-default-browser-check \
+  --disable-notifications \
+  --disable-popup-blocking \
+  --disable-session-crashed-bubble \
+  --disable-sync \
+  --start-maximized
 ```
 
-Then navigate to https://gemini.google.com/app and log in **once**. Login persists in the profile.
-
-### One-command startup script
+**Terminal 2 — Bridge server (port 8787):**
 
 ```bash
-chmod +x ~/start.sh
-~/start.sh
+BRIDGE_CDP_URL=http://127.0.0.1:9555 bridge server --host 127.0.0.1 --port 8787 --provider both
 ```
 
-This starts Chrome + the bridge server. Then open OpenCode Desktop and select a Gemini model.
+> Use `--provider gemini`, `--provider chatgpt`, or `--provider both`.
 
----
+**Log in to the provider** in the Chrome window that opens:
+- Gemini: navigate to https://gemini.google.com/app and log in once. Login persists in the profile.
+- ChatGPT: navigate to https://chatgpt.com and log in once.
 
-## Setup Browser for ChatGPT
-
-### CDP Mode
-
-```bash
-google-chrome \
-  --remote-debugging-port=9333 \
-  --user-data-dir="$HOME/.subscription-bridge/chrome-profile" \
-  --no-first-run \
-  --no-default-browser-check
-```
-
-Then navigate to https://chatgpt.com and log in **once**. Login persists in the profile.
-
-### Start with ChatGPT
-
-```bash
-bridge server --provider chatgpt
-```
-
-Or let the server prompt you:
-
-```bash
-bridge server
-# ? Which provider do you want to use?
-#   1) Gemini
-#   2) ChatGPT
-#   3) Both
-```
-
-In OpenCode, select the `subscription-bridge-chatgpt` model.
-
-### Verify
+**Verify:**
 
 ```bash
 curl http://127.0.0.1:8787/health
 curl http://127.0.0.1:8787/v1/models
 ```
+
+### Detached (background) mode
+
+```bash
+# Start Chrome detached
+setsid nohup google-chrome \
+  --remote-debugging-port=9555 \
+  --remote-debugging-address=127.0.0.1 \
+  --user-data-dir="$HOME/.subscription-bridge/chrome-profile" \
+  --no-first-run --no-default-browser-check --disable-sync \
+  </dev/null >/dev/null 2>&1 & disown
+
+# Start bridge server detached
+setsid nohup env BRIDGE_CDP_URL=http://127.0.0.1:9555 \
+  bridge server --host 127.0.0.1 --port 8787 --provider both \
+  </dev/null >/tmp/bridge_server.log 2>&1 & disown
+
+# Stop
+./stop.sh
+pkill -f "remote-debugging-port=9555"
+```
+
+### Configure OpenCode
+
+Add the SubscriptionBridge provider to `~/.config/opencode/opencode.json` — see [docs/opencode.md](docs/opencode.md) for the full config. Then select a `subscription-bridge-*` model in OpenCode.
 
 ---
 

@@ -59,9 +59,9 @@ bridge codebase stats -w .
 ## D. Browser/Gemini Demo
 
 ```bash
-# 1. Start Chrome with remote debugging on port 9333
+# 1. Start Chrome with remote debugging on port 9555
 google-chrome \
-  --remote-debugging-port=9333 \
+  --remote-debugging-port=9555 \
   --user-data-dir="$HOME/.subscription-bridge/chrome-profile" \
   --no-first-run \
   --no-default-browser-check

@@ -34,7 +34,7 @@ app:
 ```yaml
 browser:
   mode: managed
-  cdp_url: "http://127.0.0.1:9333"
+  cdp_url: "http://127.0.0.1:9555"
   headless: false
   user_data_dir: "~/.subscription-bridge/chrome-profile"
   downloads_dir: "~/.subscription-bridge/downloads"
@@ -47,7 +47,7 @@ browser:
 | Key | Default | Description |
 |-----|---------|-------------|
 | `mode` | `managed` | `managed` (Playwright launches browser) or `cdp` (connect to existing Chrome) |
-| `cdp_url` | `http://127.0.0.1:9333` | CDP endpoint for `cdp` mode |
+| `cdp_url` | `http://127.0.0.1:9555` | CDP endpoint for `cdp` mode |
 | `headless` | `false` | Run browser in headless mode |
 | `user_data_dir` | `~/.subscription-bridge/chrome-profile` | Browser profile directory |
 | `max_sessions` | `3` | Maximum concurrent browser tab sessions |

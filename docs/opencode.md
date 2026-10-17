@@ -106,17 +106,19 @@ SubscriptionBridge does not implement subagents. OpenCode manages agents.
 ### Option A: Gemini
 
 ```bash
-# 1. Start Chrome with remote debugging
+# 1. Start Chrome with remote debugging on port 9555
 google-chrome \
-  --remote-debugging-port=9333 \
+  --remote-debugging-port=9555 \
+  --remote-debugging-address=127.0.0.1 \
   --user-data-dir="$HOME/.subscription-bridge/chrome-profile" \
   --no-first-run \
-  --no-default-browser-check
+  --no-default-browser-check \
+  --disable-sync
 
 # 2. Navigate to https://gemini.google.com/app and log in manually
 
 # 3. Start the bridge server
-bridge server --provider gemini
+BRIDGE_CDP_URL=http://127.0.0.1:9555 bridge server --host 127.0.0.1 --port 8787 --provider gemini
 
 # 4. Verify models
 curl http://127.0.0.1:8787/v1/models
@@ -127,17 +129,19 @@ curl http://127.0.0.1:8787/v1/models
 ### Option B: ChatGPT
 
 ```bash
-# 1. Start Chrome with remote debugging
+# 1. Start Chrome with remote debugging on port 9555
 google-chrome \
-  --remote-debugging-port=9333 \
+  --remote-debugging-port=9555 \
+  --remote-debugging-address=127.0.0.1 \
   --user-data-dir="$HOME/.subscription-bridge/chrome-profile" \
   --no-first-run \
-  --no-default-browser-check
+  --no-default-browser-check \
+  --disable-sync
 
 # 2. Navigate to https://chatgpt.com and log in manually
 
 # 3. Start the bridge server
-bridge server --provider chatgpt
+BRIDGE_CDP_URL=http://127.0.0.1:9555 bridge server --host 127.0.0.1 --port 8787 --provider chatgpt
 
 # 4. Verify models
 curl http://127.0.0.1:8787/v1/models
@@ -145,11 +149,20 @@ curl http://127.0.0.1:8787/v1/models
 # 5. Select the ChatGPT model in OpenCode
 ```
 
-### Option C: Both
+### Option C: Both (or use the script)
 
 ```bash
-# Start server with both providers
-bridge server --provider both
+# One-command startup (Chrome + server)
+./start.sh both
+
+# Or start manually:
+google-chrome \
+  --remote-debugging-port=9555 \
+  --remote-debugging-address=127.0.0.1 \
+  --user-data-dir="$HOME/.subscription-bridge/chrome-profile" \
+  --no-first-run --no-default-browser-check --disable-sync &
+
+BRIDGE_CDP_URL=http://127.0.0.1:9555 bridge server --host 127.0.0.1 --port 8787 --provider both
 
 # Or let the server prompt you
 bridge server

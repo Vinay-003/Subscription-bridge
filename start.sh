@@ -5,8 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 VENV_PYTHON="$SCRIPT_DIR/.venv/bin/python3"
 BRIDGE="$SCRIPT_DIR/.venv/bin/bridge"
 CHROME_PROFILE="$HOME/.subscription-bridge/chrome-profile"
-CDP_PORT=9333
-API_PORT=8787
+CDP_PORT="${BRIDGE_CDP_PORT:-9555}"
+API_PORT="${BRIDGE_API_PORT:-8787}"
 BRIDGE_PID=""
 CHROME_PID=""
 PROVIDER="${1:-gemini}"
@@ -90,12 +90,14 @@ fi
 echo "[3] Launching Chrome with CDP on port $CDP_PORT..."
 google-chrome \
     --remote-debugging-port=$CDP_PORT \
+    --remote-debugging-address=127.0.0.1 \
     --user-data-dir="$CHROME_PROFILE" \
     --no-first-run \
     --no-default-browser-check \
     --disable-notifications \
     --disable-popup-blocking \
     --disable-session-crashed-bubble \
+    --disable-sync \
     --start-maximized \
     > /dev/null 2>&1 &
 CHROME_PID=$!
@@ -115,8 +117,8 @@ for i in $(seq 1 15); do
 done
 
 # ---- 5. Launch bridge API server ----
-echo "[5] Starting bridge API server on port $API_PORT (provider: $PROVIDER)..."
-$BRIDGE server --host 127.0.0.1 --port $API_PORT --provider "$PROVIDER" &
+echo "[5] Starting bridge API server on port $API_PORT (provider: $PROVIDER, CDP: $CDP_PORT)..."
+BRIDGE_CDP_URL="http://127.0.0.1:$CDP_PORT" $BRIDGE server --host 127.0.0.1 --port $API_PORT --provider "$PROVIDER" &
 BRIDGE_PID=$!
 
 # ---- 6. Wait for API server ----

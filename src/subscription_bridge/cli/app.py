@@ -223,7 +223,7 @@ def ask(
             except PlaywrightLaunchError as e:
                 console.print(f"[red]Browser error:[/red] {e}")
                 console.print("\n[bold]Manual Chrome launch command:[/bold]")
-                _print_launch_command("http://127.0.0.1:9333")
+                _print_launch_command("http://127.0.0.1:9555")
                 raise typer.Exit(code=1) from e
         elif provider_name == "chatgpt":
             try:
@@ -728,7 +728,7 @@ def browser_doctor() -> None:
     config = load_config()
     browser_config = config.get("browser", {})
     mode = str(browser_config.get("mode", "managed"))
-    cdp_url = str(browser_config.get("cdp_url", "http://127.0.0.1:9333"))
+    cdp_url = str(browser_config.get("cdp_url", "http://127.0.0.1:9555"))
 
     console.print(Panel("Browser Environment Check", border_style="blue"))
     ok = True
@@ -799,7 +799,7 @@ def _print_launch_command(cdp_url: str) -> None:
     from urllib.parse import urlparse
 
     parsed = urlparse(cdp_url)
-    port = parsed.port or 9333
+    port = parsed.port or 9555
     profile = "~/.subscription-bridge/chrome-profile"
 
     commands = {

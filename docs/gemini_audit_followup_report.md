@@ -69,7 +69,7 @@ The environment does not have `structlog` installed and could not access the pac
 
 ## Suggested manual smoke test
 
-1. Start Chrome with CDP on port 9333 using a dedicated profile and log into Gemini and ChatGPT.
+1. Start Chrome with CDP on port 9555 using a dedicated profile and log into Gemini and ChatGPT.
 2. Keep a provider tab open and start SubscriptionBridge in CDP mode.
 3. From OpenCode, ask for a small file edit requiring at least two tool calls and a tool result between them.
 4. Verify the browser shows the request and latest response, the second turn sees the original task and tool result, and OpenCode (not SubscriptionBridge) executes the tools.
