@@ -32,7 +32,7 @@ def test_model_catalog_loads_configured_aliases() -> None:
 
     assert resolve_model_alias("gemini-2.0-flash") == "subscription-bridge-gemini-flash-lite"
     assert resolve_model_alias("subscription-bridge-gemini-fast") == "subscription-bridge-gemini-flash"
-    assert context_limit_for_model("subscription-bridge-gemini-thinking") == 1048576
+    assert context_limit_for_model("subscription-bridge-gemini-thinking") == 1000000
     assert context_limit_for_model("subscription-bridge-gemini-flash") == 1048576
 
 
@@ -42,14 +42,17 @@ def test_model_context_and_output_limits_match_published_specs() -> None:
         output_limit_for_model,
     )
 
-    for gemini_id in (
+    gemini_full = (
         "subscription-bridge-gemini-flash-lite",
         "subscription-bridge-gemini-flash",
-        "subscription-bridge-gemini-pro",
         "subscription-bridge-gemini-argon",
-    ):
+    )
+    for gemini_id in gemini_full:
         assert context_limit_for_model(gemini_id) == 1048576
         assert output_limit_for_model(gemini_id) == 65536
+
+    assert context_limit_for_model("subscription-bridge-gemini-pro") == 1000000
+    assert output_limit_for_model("subscription-bridge-gemini-pro") == 65536
 
     for chatgpt_id in (
         "subscription-bridge-chatgpt",

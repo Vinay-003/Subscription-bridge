@@ -62,7 +62,7 @@ Add the following to your OpenCode configuration (e.g., `~/.config/opencode/open
         },
         "subscription-bridge-gemini-pro": {
           "name": "Gemini 3.1 Pro",
-          "limit": { "context": 1048576, "output": 65536 },
+          "limit": { "context": 1000000, "output": 65536 },
           "modalities": { "input": ["text", "image"], "output": ["text"] },
           "tool_call": true,
           "reasoning": true,

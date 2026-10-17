@@ -36,7 +36,7 @@ models:
     provider: gemini
     provider_variant: 3.1 Pro
     label: Gemini 3.1 Pro (Browser)
-    context_limit: 1048576
+    context_limit: 1000000
     output_limit: 65536
     reasoning: true
     reasoning_efforts: [low, medium, high]
