@@ -259,6 +259,17 @@ are still accepted as aliases and resolve to `gemini-flash` and `gemini-pro`.
 When OpenCode compacts a session (the re-sent history shrinks), SubscriptionBridge
 detects the rewrite and restarts the browser chat with the full post-compaction
 transcript, so browser context stays consistent with OpenCode's compacted view.
+The system prompt is **not** re-sent in full: the browser receives a short reminder
+(a bounded slice of the operating rules plus the tool contract) so the summary turn
+does not re-inject the entire initial prompt into an already compacted context.
+
+On the first turn of a conversation the system prompt is delivered as two labelled
+sections when a boundary exists between them: `<context_overview>` (identity, env,
+skills) and `<operating_instructions>` (tools and rules).
+
+Long generations stream `: keepalive` SSE comments every 10 s, and the browser
+response wait follows the budget table in `docs/configuration.md`, so slow Argon/Pro
+turns are no longer cut off at a fixed 120 s.
 
 ---
 

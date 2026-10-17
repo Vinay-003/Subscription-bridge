@@ -65,6 +65,137 @@ def convert_messages(
     return prompt, system_prompt
 
 
+SYSTEM_CONTEXT_TAG = "context_overview"
+SYSTEM_CONTRACT_TAG = "operating_instructions"
+COMPACT_SYSTEM_BUDGET_TOKENS = 2000
+
+_COMPACT_HEADER = (
+    "Earlier conversation turns were compacted by the client and are summarized "
+    "below. Continue the session under these operating rules:\n\n"
+)
+
+# Marker, keep_marker: first marker that yields two real sections wins.
+# ``keep_marker=True`` leaves the closing tag in the context half.
+_PART2_MARKERS: tuple[tuple[str, bool], ...] = (
+    ("</available_skills>", True),
+    ("</skills>", True),
+    ("\nYou have access to tools. Available tools:", False),
+    ("\n## Available Commands", False),
+    ("\n# Tools", False),
+    ("\n## Tools", False),
+    ("\n## Tool Usage", False),
+)
+
+_COMPACT_SOURCE_MARKERS = (
+    "# Operational Guidelines",
+    "## Tone and Style",
+    "# Final Reminder",
+)
+
+_MIN_SECTION_CHARS = 200
+_TOOL_INSTRUCTION_MARKER = "\nYou have access to tools. Available tools:"
+
+
+def split_system_prompt(text: str) -> tuple[str, str]:
+    """Split a system prompt into background context and operating contract.
+
+    Part 1 carries the identity/env/skills material ("who and where I am"),
+    part 2 carries the tools and rules ("what I must do"). Prompts without a
+    recognisable boundary fall back to a paragraph break near the midpoint.
+    Returns ``(text, "")`` when no meaningful split exists.
+    """
+    stripped = text.strip()
+    if not stripped:
+        return "", ""
+    if len(stripped) < _MIN_SECTION_CHARS * 2:
+        return stripped, ""
+    for marker, keep_marker in _PART2_MARKERS:
+        idx = stripped.find(marker)
+        if idx == -1:
+            continue
+        cut = idx + len(marker) if keep_marker else idx
+        part1, part2 = stripped[:cut].strip(), stripped[cut:].strip()
+        if len(part1) >= _MIN_SECTION_CHARS and len(part2) >= _MIN_SECTION_CHARS:
+            return part1, part2
+    return _midpoint_split(stripped)
+
+
+def render_system_prompt(system_prompt: str) -> str:
+    """Wrap a system prompt in two labelled blocks for the first browser turn.
+
+    Delimited sections give the browser model a clear boundary between
+    background context and the operating contract instead of one undifferentiated
+    wall of text. Prompts that do not split are forwarded unchanged.
+    """
+    part1, part2 = split_system_prompt(system_prompt)
+    if not part1 or not part2:
+        return system_prompt
+    return (
+        f"<{SYSTEM_CONTEXT_TAG}>\n{part1}\n</{SYSTEM_CONTEXT_TAG}>\n\n"
+        f"<{SYSTEM_CONTRACT_TAG}>\n{part2}\n</{SYSTEM_CONTRACT_TAG}>"
+    )
+
+
+def compact_system_prompt(system_prompt: str) -> str:
+    """Build the short reminder re-sent after the client compacts history.
+
+    Compaction keeps the system message in the transcript, so re-sending it in
+    full would re-add the entire initial prompt to an already-summarized context.
+    Only a bounded slice of the operating rules is forwarded instead; the tool
+    contract is always preserved because tool calling breaks without it.
+    """
+    text = system_prompt.strip()
+    if not text:
+        return ""
+    head, tool_contract = _split_tool_instruction(text)
+    source = ""
+    for marker in _COMPACT_SOURCE_MARKERS:
+        idx = head.find(marker)
+        if idx != -1:
+            source = head[idx:]
+            break
+    if not source:
+        _, part2 = split_system_prompt(head)
+        source = part2 or head
+    compacted = _truncate_chars(source, COMPACT_SYSTEM_BUDGET_TOKENS * 4)
+    if tool_contract:
+        return f"{_COMPACT_HEADER}{compacted}\n\n{tool_contract}"
+    return _COMPACT_HEADER + compacted
+
+
+def _midpoint_split(text: str) -> tuple[str, str]:
+    midpoint = len(text) // 2
+    cut = text.rfind("\n\n", 0, midpoint)
+    if cut == -1 or cut < len(text) * 0.15:
+        cut = text.find("\n\n", midpoint)
+    if cut == -1:
+        return text, ""
+    part1, part2 = text[:cut].strip(), text[cut:].strip()
+    if len(part1) < _MIN_SECTION_CHARS or len(part2) < _MIN_SECTION_CHARS:
+        return text, ""
+    return part1, part2
+
+
+def _truncate_chars(text: str, limit: int) -> str:
+    stripped = text.strip()
+    if len(stripped) <= limit:
+        return stripped
+    cut = stripped.rfind("\n", 0, limit)
+    if cut < limit // 2:
+        cut = limit
+    return stripped[:cut].rstrip()
+
+
+def _split_tool_instruction(text: str) -> tuple[str, str]:
+    """Split the appended tool contract off the tail of a system prompt."""
+    idx = text.rfind(_TOOL_INSTRUCTION_MARKER)
+    if idx != -1:
+        return text[:idx].strip(), text[idx:].strip()
+    if text.startswith("You have access to tools. Available tools:"):
+        return "", text.strip()
+    return text, ""
+
+
 def _tool_instruction(
     tools: list[dict[str, Any]],
     tool_choice: str | dict[str, Any] | None,

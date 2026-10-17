@@ -284,6 +284,132 @@ def test_chat_completions_passes_model_id_in_metadata(
     assert captured[-1].metadata["model_id"] == "subscription-bridge-fake"
 
 
+def _opencode_like_system_prompt() -> str:
+    background = "# Core Mandates\n" + ("Stay concise and stay in scope.\n" * 10)
+    skills = "<available_skills>\n" + "".join(
+        f"  <skill>\n    <name>skill-{i}</name>\n    <description>{'detail ' * 20}</description>\n  </skill>\n"
+        for i in range(5)
+    ) + "</available_skills>"
+    rules = "\n\n# Final Reminder\n" + ("Answer under four lines.\n" * 10)
+    env = "\n<env>\nWorking directory: /home/mylappy/Projects/Subscription-bridge\n</env>"
+    return background + env + skills + rules
+
+
+def _capture_adapter(monkeypatch: pytest.MonkeyPatch) -> list[object]:
+    from subscription_bridge.api import openai_compat as oc
+    from subscription_bridge.providers.base import ProviderResponse
+
+    captured: list[object] = []
+
+    class CaptureAdapter:
+        name = "fake"
+
+        async def send_prompt(self, request: object) -> ProviderResponse:
+            captured.append(request)
+            return ProviderResponse(
+                provider="fake", text="ok", raw_text="ok", success=True, latency_seconds=0.0,
+            )
+
+    async def fake_resolve(model_id: str, deps: object) -> CaptureAdapter:
+        return CaptureAdapter()
+
+    monkeypatch.setattr(oc, "resolve_adapter", fake_resolve)
+    return captured
+
+
+def test_chat_completions_renders_split_system_prompt_on_first_turn(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from subscription_bridge.api.openai.message_converter import (
+        SYSTEM_CONTEXT_TAG,
+        SYSTEM_CONTRACT_TAG,
+    )
+
+    captured = _capture_adapter(monkeypatch)
+    system_prompt = _opencode_like_system_prompt()
+    tools = [{"type": "function", "function": {"name": "read", "parameters": {"type": "object"}}}]
+
+    r = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "subscription-bridge-fake",
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": "hi"},
+            ],
+            "tools": tools,
+        },
+        headers={"x-opencode-session": "sess-split-render"},
+    )
+    assert r.status_code == 200
+    rendered = captured[-1].system_prompt
+    assert rendered.startswith(f"<{SYSTEM_CONTEXT_TAG}>")
+    assert f"</{SYSTEM_CONTEXT_TAG}>\n\n<{SYSTEM_CONTRACT_TAG}>" in rendered
+    assert "skill-0" in rendered
+    contract = rendered.split(f"<{SYSTEM_CONTRACT_TAG}>", 1)[1]
+    assert "You have access to tools." in contract
+    assert "skill-0" not in contract
+    # Second turn relies on the persisted browser chat: no system prompt resend.
+    client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "subscription-bridge-fake",
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"},
+                {"role": "user", "content": "next"},
+            ],
+        },
+        headers={"x-opencode-session": "sess-split-render"},
+    )
+    assert captured[-1].system_prompt is None
+
+
+def test_chat_completions_sends_bounded_reminder_after_compaction(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = _capture_adapter(monkeypatch)
+    system_prompt = _opencode_like_system_prompt()
+    tools = [{"type": "function", "function": {"name": "read", "parameters": {"type": "object"}}}]
+    headers = {"x-opencode-session": "sess-compaction-reminder"}
+
+    client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "subscription-bridge-fake",
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": "first"},
+            ],
+            "tools": tools,
+        },
+        headers=headers,
+    )
+    full_first_turn = captured[-1].system_prompt
+    assert full_first_turn.startswith("<context_overview>")
+
+    r = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "subscription-bridge-fake",
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": "summary of the compacted conversation"},
+            ],
+            "tools": tools,
+        },
+        headers=headers,
+    )
+    assert r.status_code == 200
+    reminder = captured[-1].system_prompt
+    assert captured[-1].metadata["restart_conversation"] is True
+    assert reminder.startswith("Earlier conversation turns were compacted")
+    assert len(reminder) < len(full_first_turn) // 2
+    assert "skill-0" not in reminder
+    assert "You have access to tools." in reminder
+
+
 # ── Tool call parsing tests ──────────────────────────────────────────────────
 
 

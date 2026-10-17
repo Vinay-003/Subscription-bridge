@@ -13,9 +13,11 @@ from starlette.responses import JSONResponse, StreamingResponse
 from subscription_bridge.api.dependencies import AppDependencies
 from subscription_bridge.api.openai.message_converter import (
     cleanup_temp_files,
+    compact_system_prompt,
     convert_messages,
     extract_images_from_content,
     extract_text,
+    render_system_prompt,
     save_image,
 )
 from subscription_bridge.api.openai.model_catalog import (
@@ -354,10 +356,15 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
     )
     # System prompt is only needed on the first turn; the browser chat
     # persists it. On delta turns the adapter skips system_prompt anyway.
-    if not is_first_request and not history_rewritten:
-        system_prompt = ""
+    # The first turn is delivered as two labelled sections so the browser model
+    # separates background context from the operating contract. After compaction
+    # the original prompt must not be re-sent in full: only a bounded reminder.
     if history_rewritten:
-        system_prompt = full_system_prompt
+        system_prompt = compact_system_prompt(full_system_prompt)
+    elif is_first_request:
+        system_prompt = render_system_prompt(system_prompt)
+    else:
+        system_prompt = ""
 
     workspace_resolution = resolve_workspace(req, request)
     log.info("workspace_resolved", workspace=workspace_resolution.path, source=workspace_resolution.source)
