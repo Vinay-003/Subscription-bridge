@@ -11,6 +11,13 @@ BRIDGE_PID=""
 CHROME_PID=""
 PROVIDER="${1:-gemini}"
 
+LOG_DIR="$HOME/.subscription-bridge/logs"
+LOG_FILE="$LOG_DIR/bridge.log"
+mkdir -p "$LOG_DIR"
+exec > >(tee -a "$LOG_FILE") 2>&1
+echo ""
+echo "=== start.sh session started $(date -Is) (provider: $PROVIDER) ==="
+
 usage() {
     echo "Usage: $0 [gemini|chatgpt|both]"
     echo ""
