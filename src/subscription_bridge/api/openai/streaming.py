@@ -11,6 +11,11 @@ from subscription_bridge.api.openai.tool_parser import parse_tool_calls
 from subscription_bridge.api.openai_models import ChatCompletionChunk, ChoiceDelta, DeltaMessage
 from subscription_bridge.providers.base import ProviderRequest
 
+# SSE comment interval while the browser provider is still generating. Without
+# bytes on the wire the client's HTTP stack can abort a long generation long
+# before the provider's own response budget expires.
+KEEPALIVE_INTERVAL_SECONDS = 10.0
+
 
 async def stream_response(
     adapter: Any,
@@ -25,7 +30,28 @@ async def stream_response(
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     now = int(time.time())
 
-    response = await adapter.send_prompt(request)
+    provider_task = asyncio.ensure_future(adapter.send_prompt(request))
+    try:
+        while True:
+            done, _ = await asyncio.wait({provider_task}, timeout=KEEPALIVE_INTERVAL_SECONDS)
+            if done:
+                break
+            yield ": keepalive\n\n"
+        response = provider_task.result()
+    except (asyncio.CancelledError, GeneratorExit):
+        provider_task.cancel()
+        raise
+    except Exception as e:
+        error = {
+            "error": {
+                "message": str(e),
+                "type": "provider_error",
+                "code": "provider_error",
+            }
+        }
+        yield "data: " + json.dumps(error, ensure_ascii=False) + "\n\n"
+        yield "data: [DONE]\n\n"
+        return
 
     if not response.success:
         # Use an SSE error payload instead of disguising a provider failure as a successful answer.
