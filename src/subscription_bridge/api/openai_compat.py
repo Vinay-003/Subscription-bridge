@@ -47,6 +47,36 @@ from subscription_bridge.workspace import resolve_workspace
 
 router = APIRouter()
 
+# Per-conversation delta tracking: conversation_id -> last_msg_count_sent.
+# OpenCode sends the FULL history every turn. The browser chat already has prior
+# turns, so we only forward the NEW messages (delta) to avoid double context.
+_conversation_delta: dict[str, int] = {}
+
+
+def _delta_messages(messages: list[Any], conversation_id: str) -> list[Any]:
+    """Return only the messages that are new since the last request for this conversation.
+
+    OpenCode re-sends the entire message list every turn. The browser chat
+    already contains prior turns, so forwarding the full list causes the
+    browser LLM to see duplicated context (its own history + our re-sent
+    history), which bloats the prompt and causes empty/refusal responses.
+
+    Strategy: track how many messages we last sent. On the next request,
+    send only the tail beyond that count. If the client rewrote/compacted
+    history (count <= last_count), send everything again.
+    """
+    count = len(messages)
+    last_count = _conversation_delta.get(conversation_id, 0)
+
+    if count <= last_count:
+        # History was rewritten or compacted — send everything.
+        _conversation_delta[conversation_id] = count
+        return messages
+
+    delta = messages[last_count:]
+    _conversation_delta[conversation_id] = count
+    return delta
+
 def _get_deps(request: Request) -> AppDependencies:
     deps: AppDependencies = request.app.state.deps
     return deps
@@ -272,22 +302,31 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
         )
 
     has_tools = bool(req.tools) and req.tool_choice != "none"
+    conversation_id = _conversation_id(req.messages, request)
+    # Only forward NEW messages to the browser. The browser chat already has
+    # prior turns; re-sending full history causes double context bloat.
+    delta_msgs = _delta_messages(req.messages, conversation_id)
+    is_first_request = len(delta_msgs) == len(req.messages)
     prompt, system_prompt = _convert_messages(
-        req.messages, req.tools if has_tools else None,
+        delta_msgs, req.tools if has_tools else None,
         tool_choice=req.tool_choice,
         require_json_tools=has_tools,
     )
+    # System prompt is only needed on the first turn; the browser chat
+    # persists it. On delta turns the adapter skips system_prompt anyway.
+    if not is_first_request:
+        system_prompt = ""
 
     workspace_resolution = resolve_workspace(req, request)
     log.info("workspace_resolved", workspace=workspace_resolution.path, source=workspace_resolution.source)
 
     attachments: list[str] = []
-    for msg in req.messages:
+    for msg in delta_msgs:
         if isinstance(msg.content, list):
             attachments.extend(_extract_images_from_content(msg.content))
 
     provider_req = ProviderRequest(
-        run_id=_conversation_id(req.messages, request),
+        run_id=conversation_id,
         prompt=prompt,
         system_prompt=system_prompt or None,
         attachments=attachments or None,

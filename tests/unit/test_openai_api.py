@@ -579,4 +579,4 @@ def test_openai_gateway_tool_loop_preserves_session_and_returns_to_opencode(
     assert seen[0].run_id == seen[1].run_id
     assert seen[0].metadata["isolated_conversation"] is True
     assert "README contents" in seen[1].prompt
-    assert "Inspect README.md" in seen[1].prompt  # transparent proxy sends full history each turn
+    assert "Inspect README.md" not in seen[1].prompt  # delta: only new messages are sent
