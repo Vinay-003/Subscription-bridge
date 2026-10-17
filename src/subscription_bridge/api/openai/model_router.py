@@ -19,6 +19,10 @@ class ModelRoute:
     variant: str | None = None
 
 
+class ProviderUnavailableError(Exception):
+    """Raised when a known model's browser provider cannot start or connect."""
+
+
 def route_for_model(model_id: str) -> ModelRoute | None:
     provider = provider_for_model(model_id)
     if provider is None:
@@ -39,13 +43,19 @@ async def resolve_adapter(model_id: str, deps: AppDependencies) -> Any | None:
     if route.provider == "gemini":
         try:
             return await deps.get_gemini_adapter()
-        except Exception:
-            return None
+        except Exception as e:
+            raise ProviderUnavailableError(
+                f"Gemini provider unavailable (is Chrome running with CDP on "
+                f"the configured port?): {e}"
+            ) from e
     if route.provider == "chatgpt":
         try:
             return await deps.get_chatgpt_adapter()
-        except Exception:
-            return None
+        except Exception as e:
+            raise ProviderUnavailableError(
+                f"ChatGPT provider unavailable (is Chrome running with CDP on "
+                f"the configured port?): {e}"
+            ) from e
     return None
 
 

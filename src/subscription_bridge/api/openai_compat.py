@@ -264,7 +264,12 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
             ),
         )
 
-    provider_adapter = await _resolve_adapter(req.model, deps)
+    from subscription_bridge.api.openai.model_router import ProviderUnavailableError
+
+    try:
+        provider_adapter = await _resolve_adapter(req.model, deps)
+    except ProviderUnavailableError as e:
+        return _error_json(str(e), code="provider_unavailable", param="model", status_code=503)
     if provider_adapter is None:
         return _error_json(
             f"Model not found: {req.model}",
