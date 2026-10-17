@@ -71,3 +71,54 @@ async def test_cdp_create_page_claims_existing_provider_tab_before_opening_new_t
     assert first.url == "https://chatgpt.com/c/visible-conversation"
     assert second is not first
     assert len(pm.context.pages) == 2
+
+
+@pytest.mark.asyncio
+async def test_cdp_create_page_navigates_claimed_blank_tab_to_provider_app() -> None:
+    class FakePage:
+        def __init__(self, url: str) -> None:
+            self.url = url
+
+        async def goto(self, url: str, **kwargs: object) -> None:
+            self.url = url
+
+    class FakeContext:
+        def __init__(self) -> None:
+            self.pages = [FakePage("chrome://newtab/")]
+
+    pm = PlaywrightManager({"browser": {"mode": "cdp"}})
+    pm._mode = "cdp"
+    pm._context = FakeContext()
+
+    page = await pm.create_page("gemini")
+
+    assert page.url == "https://gemini.google.com/app"
+    assert len(pm.context.pages) == 1
+
+
+@pytest.mark.asyncio
+async def test_cdp_create_page_navigates_fresh_tab_to_provider_app() -> None:
+    class FakePage:
+        def __init__(self, url: str) -> None:
+            self.url = url
+
+        async def goto(self, url: str, **kwargs: object) -> None:
+            self.url = url
+
+    class FakeContext:
+        def __init__(self) -> None:
+            self.pages = [FakePage("https://chatgpt.com/c/visible-conversation")]
+
+        async def new_page(self) -> FakePage:
+            page = FakePage("about:blank")
+            self.pages.append(page)
+            return page
+
+    pm = PlaywrightManager({"browser": {"mode": "cdp"}})
+    pm._mode = "cdp"
+    pm._context = FakeContext()
+
+    page = await pm.create_page("gemini")
+
+    assert page.url == "https://gemini.google.com/app"
+    assert len(pm.context.pages) == 2

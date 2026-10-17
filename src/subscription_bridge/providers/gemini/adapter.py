@@ -72,6 +72,11 @@ class GeminiProviderAdapter(ProviderAdapter):
                 allow_cross_run_reuse=not bool((request.metadata or {}).get("isolated_conversation")),
             )
 
+            # OpenCode compacted/rewrote history: the browser chat is stale,
+            # start a fresh chat and resend the post-compaction transcript.
+            if (request.metadata or {}).get("restart_conversation"):
+                session.has_active_conversation = False
+
             # On a fresh/reset browser chat, restore the full OpenCode transcript;
             # on a continuing browser chat, send only the incremental tail.
             if not session.has_active_conversation and isinstance(request.metadata, dict):
@@ -80,8 +85,14 @@ class GeminiProviderAdapter(ProviderAdapter):
             if request.system_prompt and not session.has_active_conversation:
                 prompt = request.system_prompt + "\n\n" + prompt
 
+            # A freshly claimed CDP tab (or restored Chrome tab) may still be
+            # hydrating; model/thinking controls only exist once the app shell
+            # is interactive. Wait here so switches do not silently no-op.
+            await _wait_for_ui_ready(session.page)
+
             requested_variant = _extract_model_variant(request)
             requested_thinking = _extract_thinking_enabled(request)
+            requested_level = _extract_thinking_level(request)
 
             if requested_variant and session.selected_model_variant != requested_variant:
                 detected_before = await _detect_model_label(session.page)
@@ -114,7 +125,21 @@ class GeminiProviderAdapter(ProviderAdapter):
                         run_id=request.run_id,
                     )
 
-            if requested_thinking:
+            if requested_level and session.thinking_level != requested_level:
+                logger.info(
+                    "thinking_level_requested",
+                    level=requested_level,
+                    run_id=request.run_id,
+                )
+                applied = await _set_thinking_level(session.page, requested_level)
+                session.thinking_level = requested_level if applied else None
+                logger.info(
+                    "thinking_level_done",
+                    level=requested_level,
+                    applied=applied,
+                    run_id=request.run_id,
+                )
+            elif requested_thinking and not requested_level:
                 await _toggle_thinking(session.page, enabled=True)
 
             is_continuation = session.has_active_conversation
@@ -360,34 +385,64 @@ def _extract_thinking_enabled(request: ProviderRequest) -> bool:
     return False
 
 
+def _extract_thinking_level(request: ProviderRequest) -> str | None:
+    """Read the requested Gemini thinking level (low/medium/high)."""
+    if not (request.metadata and isinstance(request.metadata, dict)):
+        return None
+    raw = request.metadata.get("thinking_level") or request.metadata.get("gemini_thinking_level")
+    if not isinstance(raw, str):
+        return None
+    level = raw.strip().lower()
+    if level in ("low", "medium", "high"):
+        return level
+    if level in ("none", "minimal"):
+        return "low"
+    if level in ("xhigh", "max"):
+        return "high"
+    return None
+
+
 def _normalize_variant(name: str) -> str:
     return " ".join(name.lower().split())
 
 
 def _variant_aliases(name: str) -> list[str]:
     n = _normalize_variant(name)
-    if "flash lite" in n or "flash-lite" in n:
+    if "argon" in n:
+        return ["argon"]
+    if "lite" in n or "flash lite" in n or "flash-lite" in n:
         return ["flash-lite"]
     if "flash" in n:
         return ["flash"]
-    if "thinking" in n:
-        return ["thinking"]
+    if "thinking" in n or "deep think" in n:
+        return ["pro"]
     if "pro" in n:
         return ["pro"]
     return [n]
 
 
 def _variant_select_labels(name: str) -> list[str]:
+    # Exact (normalized) name first so "3.8 Flash" never matches
+    # "3.5 Flash-Lite", which also contains the substring "flash".
     n = _normalize_variant(name)
-    if "flash lite" in n or "flash-lite" in n:
-        return ["flash-lite", "flash lite", "lite"]
-    if "flash" in n:
-        return ["flash"]
-    if "thinking" in n:
-        return ["thinking", "extended"]
-    if "pro" in n:
-        return ["pro", "advanced"]
-    return _variant_aliases(name)
+    labels = [n]
+
+    def add(*candidates: str) -> None:
+        for candidate in candidates:
+            if candidate not in labels:
+                labels.append(candidate)
+
+    if "argon" in n:
+        add("4 argon", "argon", "complex tasks")
+    elif "lite" in n or "flash lite" in n or "flash-lite" in n:
+        add("3.5 flash-lite", "flash-lite", "flash lite", "fastest answers")
+    elif "thinking" in n or "deep think" in n:
+        add("3.1 pro", "pro", "advanced reasoning")
+    elif "flash" in n:
+        add("3.8 flash", "flash", "all-around help")
+    elif "pro" in n:
+        add("3.1 pro", "pro", "advanced reasoning")
+    return labels
 
 
 async def _switch_model_variant(page: Any, variant: str) -> bool:
@@ -395,28 +450,23 @@ async def _switch_model_variant(page: Any, variant: str) -> bool:
         return False
 
     select_labels = _variant_select_labels(variant)
-    open_labels = ["open mode picker", "mode picker", "model", "gemini"]
 
     try:
-        loc = page.locator("button[aria-label='Open mode picker']").first
+        loc = page.locator("button[aria-label^='Open mode picker']").first
         if await loc.count() > 0 and await loc.is_visible():
             await loc.click()
             await _async_sleep(0.8)
-            if await _click_model_in_overlay(page, select_labels):
-                await _async_sleep(0.6)
-                await dismiss_overlays(page)
+            if await _click_and_verify_model(page, variant, select_labels):
                 return True
     except Exception:
         pass
 
+    open_labels = ["open mode picker", "mode picker", "model", "gemini"]
     for _ in range(2):
         opened = await safe_click_labels(page, open_labels, timeout=4)
         if opened:
             await _async_sleep(0.8)
-            clicked = await _click_model_in_overlay(page, select_labels)
-            await _async_sleep(0.6)
-            await dismiss_overlays(page)
-            if clicked:
+            if await _click_and_verify_model(page, variant, select_labels):
                 return True
         await _async_sleep(0.4)
 
@@ -427,10 +477,7 @@ async def _switch_model_variant(page: Any, variant: str) -> bool:
                 if await loc.count() > 0 and await loc.is_visible():
                     await loc.click()
                     await _async_sleep(0.8)
-                    clicked = await _click_model_in_overlay(page, select_labels)
-                    await _async_sleep(0.6)
-                    await dismiss_overlays(page)
-                    if clicked:
+                    if await _click_and_verify_model(page, variant, select_labels):
                         return True
                     break
             except Exception:
@@ -440,34 +487,263 @@ async def _switch_model_variant(page: Any, variant: str) -> bool:
     return False
 
 
+async def _click_and_verify_model(page: Any, variant: str, select_labels: list[str]) -> bool:
+    """Click a model in the open picker, then verify the picker selection."""
+    clicked = await _click_model_in_overlay(page, select_labels)
+    await _async_sleep(0.6)
+    await dismiss_overlays(page)
+    if not clicked:
+        return False
+    selected = await _read_selected_model_label(page)
+    if selected is None:
+        # Could not re-open the picker to verify; keep the optimistic result.
+        return True
+    return _variant_label_matches(variant, selected)
+
+
+def _variant_label_matches(variant: str, selected: str) -> bool:
+    """Match variant vs the picker's selected label by model identity."""
+    wanted = set(_variant_aliases(variant))
+    actual = set(_variant_aliases(selected))
+    return bool(wanted & actual)
+
+
+async def _read_selected_model_label(page: Any) -> str | None:
+    if not await _open_mode_picker(page):
+        return None
+    label: str | None = None
+    try:
+        raw = await page.evaluate(
+            """() => {
+                const menus = document.querySelectorAll('gem-menu[data-test-id="gem-mode-menu"]');
+                for (const menu of menus) {
+                    const r = menu.getBoundingClientRect();
+                    if (r.width === 0 || r.height === 0) continue;
+                    for (const item of menu.querySelectorAll('gem-menu-item[data-test-id^="bard-mode-option-"]')) {
+                        if (!item.className.includes('selected')) continue;
+                        const l = item.querySelector('.label');
+                        return l ? l.innerText.trim() : null;
+                    }
+                }
+                return null;
+            }"""
+        )
+        label = raw if isinstance(raw, str) and raw.strip() else None
+    except Exception:
+        label = None
+    finally:
+        await dismiss_overlays(page)
+    return label
+
+
+_MODE_PICKER_SELECTORS = (
+    "button[aria-label^='Open mode picker']",
+    "button[aria-label='Open mode picker']",
+)
+
+
+async def _mode_picker_visible(page: Any) -> bool:
+    """True when the toolbar's mode picker button is rendered and visible."""
+    for selector in _MODE_PICKER_SELECTORS:
+        try:
+            loc = page.locator(selector).first
+            if await loc.count() > 0 and await loc.is_visible():
+                return True
+        except Exception:
+            continue
+    return False
+
+
+async def _wait_for_ui_ready(
+    page: Any,
+    timeout_seconds: float = 30.0,
+    login_grace_seconds: float = 10.0,
+) -> bool:
+    """Wait for the Gemini app shell to hydrate before touching its controls.
+
+    A freshly claimed CDP tab (or a just-restored Chrome tab) renders its DOM
+    progressively: the composer, mode picker and thinking submenu only exist
+    once the app shell is interactive. Without this wait, model switches
+    silently no-op on cold pages. ``needs_login`` is only terminal once it
+    persists for ``login_grace_seconds``, so a still-hydrating page is not
+    misread as logged out.
+    """
+    deadline = time.monotonic() + timeout_seconds
+    login_since: float | None = None
+    while time.monotonic() < deadline:
+        try:
+            health = await check_gemini_ready(page)
+        except Exception:
+            health = {}
+        if health.get("ready") and await _mode_picker_visible(page):
+            return True
+        if health.get("needs_login"):
+            if login_since is None:
+                login_since = time.monotonic()
+            if time.monotonic() - login_since >= login_grace_seconds:
+                return False
+        else:
+            login_since = None
+        await _async_sleep(0.5)
+    return False
+
+
+async def _open_mode_picker(page: Any) -> bool:
+    """Open the Gemini model/mode picker menu."""
+    for selector in _MODE_PICKER_SELECTORS:
+        try:
+            loc = page.locator(selector).first
+            if await loc.count() > 0 and await loc.is_visible():
+                await loc.click()
+                await _async_sleep(0.8)
+                return True
+        except Exception:
+            continue
+    if await safe_click_labels(page, ["open mode picker", "mode picker"], timeout=4):
+        await _async_sleep(0.8)
+        return True
+    for selector in get_selector("model_toggle"):
+        try:
+            loc = page.locator(selector).first
+            if await loc.count() > 0 and await loc.is_visible():
+                await loc.click()
+                await _async_sleep(0.8)
+                return True
+        except Exception:
+            continue
+    return False
+
+
+_THINKING_LEVEL_LABELS = {"low": "Low", "medium": "Medium", "high": "High"}
+
+
+async def _set_thinking_level(page: Any, level: str) -> bool:
+    """Set the Gemini thinking level via the picker's Thinking level submenu."""
+    target = _THINKING_LEVEL_LABELS.get(level)
+    if not target:
+        return False
+
+    if not await _open_mode_picker(page):
+        return False
+
+    opened = await page.evaluate(
+        """() => {
+            const menus = Array.from(document.querySelectorAll('gem-menu[data-test-id="gem-mode-menu"]'));
+            for (const menu of menus) {
+                const r = menu.getBoundingClientRect();
+                if (r.width === 0 || r.height === 0) continue;
+                for (const item of menu.querySelectorAll('gem-menu-item')) {
+                    const label = item.querySelector('.label');
+                    if (label && label.innerText.trim() === 'Thinking level') {
+                        item.click();
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }"""
+    )
+    if not opened:
+        # Fallback: the row may not live under the test-id menu anymore.
+        opened = await page.evaluate(
+            """() => {
+                const items = Array.from(document.querySelectorAll('gem-menu-item'));
+                for (const item of items) {
+                    const label = item.querySelector('.label');
+                    if (!label || label.innerText.trim() !== 'Thinking level') continue;
+                    const r = item.getBoundingClientRect();
+                    if (r.width === 0 || r.height === 0) continue;
+                    item.click();
+                    return true;
+                }
+                return false;
+            }"""
+        )
+    if not opened:
+        await dismiss_overlays(page)
+        return False
+    await _async_sleep(0.6)
+
+    result = await page.evaluate(
+        """(target) => {
+            const containers = Array.from(document.querySelectorAll('.submenu-container, [role="menu"]'));
+            for (const container of containers) {
+                const r = container.getBoundingClientRect();
+                if (r.width === 0 || r.height === 0) continue;
+                for (const item of container.querySelectorAll('gem-menu-item')) {
+                    const label = item.querySelector('.label');
+                    if (!label || label.innerText.trim() !== target) continue;
+                    const checked = item.className.includes('selected') ||
+                        !!item.querySelector('gem-icon[aria-label="Selected"]') ||
+                        !!item.querySelector('mat-icon[data-mat-icon-name="check"]');
+                    if (checked) return 'already';
+                    item.click();
+                    return 'clicked';
+                }
+            }
+            return 'not_found';
+        }""",
+        target,
+    )
+    await _async_sleep(0.6)
+    await dismiss_overlays(page)
+    return result in ("already", "clicked")
+
+
 async def _click_model_in_overlay(page: Any, labels: list[str]) -> bool:
     labels_json = str(labels)
     script = f"""
     (function() {{
         const labels = {labels_json};
+
+        function norm(s) {{
+            return (s || '').toLowerCase().replace(/\\s+/g, ' ').trim();
+        }}
+
         const containers = Array.from(document.querySelectorAll(
-            '[role="dialog"], .cdk-overlay-pane, .cdk-overlay-container, [role="menu"], [role="listbox"]'
+            '[role="dialog"], .cdk-overlay-pane, .cdk-overlay-container, [role="menu"], [role="listbox"], gem-menu'
         ));
+        const candidates = [];
+        const seen = new Set();
         for (const container of containers) {{
             const r = container.getBoundingClientRect();
             if (r.width === 0 || r.height === 0) continue;
             const items = container.querySelectorAll(
                 'button, [role="menuitem"], [role="option"], [role="menuitemradio"], ' +
-                '[role="radio"], label, [class*="option"]'
+                '[role="radio"], label, [class*="option"], gem-menu-item'
             );
             for (const el of items) {{
-                const txt = ((el.getAttribute('aria-label') || '') + ' ' +
-                    (el.getAttribute('title') || '') + ' ' +
-                    (el.innerText || '')).toLowerCase().trim();
-                if (!txt) continue;
+                if (seen.has(el)) continue;
+                seen.add(el);
                 const cr = el.getBoundingClientRect();
                 if (cr.width === 0 || cr.height === 0) continue;
-                for (const label of labels) {{
-                    if (txt.includes(label)) {{
-                        el.scrollIntoView({{block:'center'}});
-                        el.click();
-                        return true;
-                    }}
+                const nameEl = el.querySelector('.label');
+                const name = norm(nameEl ? nameEl.innerText : '');
+                const txt = norm((el.getAttribute('aria-label') || '') + ' ' +
+                    (el.getAttribute('title') || '') + ' ' +
+                    (el.innerText || ''));
+                candidates.push({{el: el, name: name, txt: txt}});
+            }}
+        }}
+
+        // Pass 1: exact name match (prevents "flash" from matching "Flash-Lite").
+        for (const label of labels) {{
+            for (const candidate of candidates) {{
+                if (candidate.name && candidate.name === label) {{
+                    candidate.el.scrollIntoView({{block:'center'}});
+                    candidate.el.click();
+                    return true;
+                }}
+            }}
+        }}
+
+        // Pass 2: substring fallback for older/re-worded UIs.
+        for (const candidate of candidates) {{
+            for (const label of labels) {{
+                if (label && candidate.txt.includes(label)) {{
+                    candidate.el.scrollIntoView({{block:'center'}});
+                    candidate.el.click();
+                    return true;
                 }}
             }}
         }}

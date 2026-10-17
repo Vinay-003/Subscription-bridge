@@ -242,3 +242,27 @@ async def test_isolated_pool_evicts_lru_idle_session_at_capacity() -> None:
     assert pool.get_session(first.session_id) is None
     assert third.owner_run_id == "conversation-c"
     await pool.release(third.session_id)
+
+
+@pytest.mark.asyncio
+async def test_make_page_forwards_provider_name_to_provider_aware_factory() -> None:
+    seen: list[str] = []
+
+    async def factory(provider_name: str = "unknown") -> str:
+        seen.append(provider_name)
+        return provider_name
+
+    result = await SessionPool._make_page(factory, "gemini")
+
+    assert result == "gemini"
+    assert seen == ["gemini"]
+
+
+@pytest.mark.asyncio
+async def test_make_page_calls_legacy_zero_arg_factory() -> None:
+    async def factory() -> str:
+        return "page"
+
+    result = await SessionPool._make_page(factory, "gemini")
+
+    assert result == "page"

@@ -46,17 +46,28 @@ class ChatGPTProviderAdapter(ProviderAdapter):
                 allow_cross_run_reuse=not bool((request.metadata or {}).get("isolated_conversation")),
             )
 
+            # OpenCode compacted/rewrote history: the browser chat is stale,
+            # start a fresh chat and resend the post-compaction transcript.
+            if (request.metadata or {}).get("restart_conversation"):
+                session.has_active_conversation = False
+
             if request.system_prompt and not session.has_active_conversation:
                 prompt = request.system_prompt + "\n\n" + prompt
 
             requested_variant = _extract_model_variant(request)
-            if requested_variant and session.selected_model_variant != requested_variant:
+            if not session.has_active_conversation and isinstance(request.metadata, dict):
+                prompt = str(request.metadata.get("full_prompt") or prompt)
+            if not session.has_active_conversation:
+                await self._ensure_fresh_chat(session)
+            await _wait_for_composer_ready(session.page)
+
+            if requested_variant:
                 logger.info(
                     "model_switch_requested",
                     requested=requested_variant,
                     run_id=request.run_id,
                 )
-                switched = await _switch_chatgpt_model(session.page, requested_variant)
+                switched = await _set_thinking(session.page, requested_variant)
                 session.selected_model_variant = requested_variant if switched else None
                 logger.info(
                     "model_switch_done",
@@ -64,12 +75,6 @@ class ChatGPTProviderAdapter(ProviderAdapter):
                     switched=switched,
                     run_id=request.run_id,
                 )
-
-            if not session.has_active_conversation and isinstance(request.metadata, dict):
-                prompt = str(request.metadata.get("full_prompt") or prompt)
-            if not session.has_active_conversation:
-                await self._ensure_fresh_chat(session)
-            await _wait_for_composer_ready(session.page)
             pre_send_count = await _count_assistant_messages(session.page)
 
             ok = await _type_prompt(session.page, prompt)
@@ -683,80 +688,27 @@ def _extract_model_variant(request: ProviderRequest) -> str | None:
     return None
 
 
-async def _switch_chatgpt_model(page: Any, variant: str) -> bool:
-    import asyncio
+_THINK_ON_VARIANTS = {"thinking", "think", "pro", "reason", "reasoning"}
+_THINK_OFF_VARIANTS = {"instant", "fast", "auto", "default", "gpt-4o", "gpt-4o mini"}
 
-    variant_lower = variant.lower().strip()
 
-    model_labels: dict[str, list[str]] = {
-        "instant": ["instant", "gpt-4o", "gpt-4o mini", "auto"],
-        "thinking": ["thinking", "o3", "o4-mini"],
-        "pro": ["pro", "gpt-4.5"],
-    }
-
-    labels = model_labels.get(variant_lower, [variant_lower])
-
-    model_picker_selectors = [
-        "button[data-testid='model-switcher']",
-        "button[aria-label*='model']",
-        "button[aria-label*='Model']",
-    ]
-
-    for selector in model_picker_selectors:
-        try:
-            loc = page.locator(selector).first
-            if await loc.count() > 0 and await loc.is_visible():
-                await loc.click()
-                await asyncio.sleep(0.8)
-                break
-        except Exception:
-            continue
-    else:
-        try:
-            await page.keyboard.press("Escape")
-        except Exception:
-            pass
+def _variant_wants_thinking(variant: str) -> bool:
+    v = variant.strip().lower()
+    if v in _THINK_OFF_VARIANTS:
         return False
+    return v in _THINK_ON_VARIANTS
 
-    for label in labels:
-        try:
-            script = r"""
-    (label) => {
-        function visible(el) {
-            const r = el.getBoundingClientRect();
-            const s = getComputedStyle(el);
-            return r.width > 0 && r.height > 0 && s.display !== 'none' && s.visibility !== 'hidden';
-        }
-        const nodes = Array.from(document.querySelectorAll(
-            'button, [role="option"], [role="menuitem"], [role="radio"], [role="tab"], li, div[role="option"]'
-        ));
-        for (const el of nodes) {
-            if (!visible(el)) continue;
-            const txt = ((el.getAttribute('aria-label') || '') + ' ' +
-                         (el.getAttribute('title') || '') + ' ' +
-                         (el.innerText || '') + ' ' +
-                         (el.textContent || '')).toLowerCase();
-            if (txt.includes(label.toLowerCase())) {
-                el.click();
-                return true;
-            }
-        }
-        return false;
-    }
-            """
-            clicked = await page.evaluate(script, label)
-            if clicked:
-                await asyncio.sleep(0.6)
-                try:
-                    await page.keyboard.press("Escape")
-                except Exception:
-                    pass
-                return True
-        except Exception:
-            continue
 
+async def _set_thinking(page: Any, variant: str) -> bool:
     try:
-        await page.keyboard.press("Escape")
+        loc = page.locator("button:has-text('Think')").first
+        if await loc.count() == 0:
+            return False
+        wanted = _variant_wants_thinking(variant)
+        pressed = await loc.get_attribute("aria-pressed") == "true"
+        if pressed != wanted:
+            await loc.click()
+            await asyncio.sleep(0.4)
+        return True
     except Exception:
-        pass
-    return False
+        return False

@@ -153,6 +153,11 @@ class PlaywrightManager:
             "gemini": ("gemini.google.com",),
             "claude": ("claude.ai",),
         }.get((provider_name or "").lower(), ())
+        provider_url = {
+            "chatgpt": "https://chatgpt.com/",
+            "gemini": "https://gemini.google.com/app",
+            "claude": "https://claude.ai/",
+        }.get((provider_name or "").lower())
 
         browser_config = self._config.get("browser", {})
         reuse_open_tab = bool(browser_config.get("reuse_open_tab", True))
@@ -181,6 +186,7 @@ class PlaywrightManager:
                 try:
                     if not page.url or page.url == "about:blank" or page.url.startswith("chrome://newtab"):
                         self._claimed_pages.add(id(page))
+                        await self._open_provider_url(page, provider_url)
                         return page
                 except Exception:
                     continue
@@ -196,11 +202,27 @@ class PlaywrightManager:
                     url = ""
                 if not url or url == "about:blank":
                     self._claimed_pages.add(id(page))
+                    await self._open_provider_url(page, provider_url)
                     return page
 
         page = await self._context.new_page()
         self._claimed_pages.add(id(page))
+        await self._open_provider_url(page, provider_url)
         return page
+
+    async def _open_provider_url(self, page: Any, url: str | None) -> None:
+        """Send a just-claimed blank tab to the provider app.
+
+        Adapters assume the page already sits on the provider app; a fresh
+        Chrome launch only has blank tabs, so the switcher/composer would
+        otherwise never exist on it.
+        """
+        if not url:
+            return
+        try:
+            await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+        except Exception:
+            pass
 
     async def stop(self) -> None:
         if self._context is not None:

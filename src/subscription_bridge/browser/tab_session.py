@@ -36,6 +36,7 @@ class TabSession:
         self.operation_lock = asyncio.Lock()
         self.has_active_conversation: bool = False
         self.selected_model_variant: str | None = None
+        self.thinking_level: str | None = None
 
     @property
     def page(self) -> Any:
@@ -68,6 +69,7 @@ class TabSession:
         self.owner_run_id = None
         self.has_active_conversation = False
         self.selected_model_variant = None
+        self.thinking_level = None
         self.last_used_at = time.monotonic()
         try:
             await self._page.close()

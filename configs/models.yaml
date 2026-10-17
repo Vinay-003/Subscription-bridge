@@ -8,21 +8,21 @@ models:
       input: [text]
       output: [text]
 
-  subscription-bridge-gemini-fast:
+  subscription-bridge-gemini-flash-lite:
     provider: gemini
-    provider_variant: Gemini 3 Flash
-    label: Gemini Browser Fast
-    context_limit: 1000000
-    output_limit: 8192
+    provider_variant: 3.5 Flash-Lite
+    label: Gemini 3.5 Flash-Lite (Browser)
+    context_limit: 1048576
+    output_limit: 16384
     capabilities:
       input: [text, image]
       output: [text]
 
-  subscription-bridge-gemini-thinking:
+  subscription-bridge-gemini-flash:
     provider: gemini
-    provider_variant: Gemini 3 Deep Think
-    label: Gemini Browser Thinking
-    context_limit: 192000
+    provider_variant: 3.8 Flash
+    label: Gemini 3.8 Flash (Browser)
+    context_limit: 1048576
     output_limit: 65536
     capabilities:
       input: [text, image]
@@ -30,9 +30,19 @@ models:
 
   subscription-bridge-gemini-pro:
     provider: gemini
-    provider_variant: Gemini 3.1 Pro
-    label: Gemini Browser Pro
+    provider_variant: 3.1 Pro
+    label: Gemini 3.1 Pro (Browser)
     context_limit: 1000000
+    output_limit: 65536
+    capabilities:
+      input: [text, image]
+      output: [text]
+
+  subscription-bridge-gemini-argon:
+    provider: gemini
+    provider_variant: 4 Argon
+    label: Gemini 4 Argon (Browser)
+    context_limit: 1048576
     output_limit: 65536
     capabilities:
       input: [text, image]
@@ -52,8 +62,8 @@ models:
     provider: chatgpt
     provider_variant: Thinking
     label: ChatGPT Browser Thinking
-    context_limit: 128000
-    output_limit: 16384
+    context_limit: 131072
+    output_limit: 131072
     capabilities:
       input: [text, image]
       output: [text]
@@ -69,8 +79,10 @@ models:
       output: [text]
 
 aliases:
-  subscription-bridge-gemini-flash: subscription-bridge-gemini-fast
-  subscription-bridge-gemini-flash-lite: subscription-bridge-gemini-fast
-  subscription-bridge-gemini-3-flash: subscription-bridge-gemini-fast
-  gemini-2.0-flash: subscription-bridge-gemini-fast
+  subscription-bridge-gemini-fast: subscription-bridge-gemini-flash
+  subscription-bridge-gemini-thinking: subscription-bridge-gemini-pro
+  subscription-bridge-gemini-3-flash: subscription-bridge-gemini-flash
+  subscription-bridge-gemini-3-flash-lite: subscription-bridge-gemini-flash-lite
+  subscription-bridge-gemini-3-pro: subscription-bridge-gemini-pro
+  gemini-2.0-flash: subscription-bridge-gemini-flash-lite
   gemini-2.5-pro: subscription-bridge-gemini-pro

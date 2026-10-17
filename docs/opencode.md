@@ -36,26 +36,47 @@ Add the following to your OpenCode configuration (e.g., `~/.config/opencode/open
           "limit": { "context": 32000, "output": 8192 }
         },
 
-        "subscription-bridge-gemini-fast": {
-          "name": "Gemini 3 Flash",
-          "limit": { "context": 1000000, "output": 8192 },
-          "modalities": { "input": ["text", "image"], "output": ["text"] }
+        "subscription-bridge-gemini-flash-lite": {
+          "name": "Gemini 3.5 Flash-Lite",
+          "limit": { "context": 1048576, "output": 16384 },
+          "modalities": { "input": ["text", "image"], "output": ["text"] },
+          "tool_call": true,
+          "reasoning": true
         },
-        "subscription-bridge-gemini-thinking": {
-          "name": "Gemini 3 Deep Think",
-          "limit": { "context": 192000, "output": 65536 },
-          "modalities": { "input": ["text", "image"], "output": ["text"] }
+        "subscription-bridge-gemini-flash": {
+          "name": "Gemini 3.8 Flash",
+          "limit": { "context": 1048576, "output": 65536 },
+          "modalities": { "input": ["text", "image"], "output": ["text"] },
+          "tool_call": true,
+          "reasoning": true
         },
         "subscription-bridge-gemini-pro": {
           "name": "Gemini 3.1 Pro",
           "limit": { "context": 1000000, "output": 65536 },
-          "modalities": { "input": ["text", "image"], "output": ["text"] }
+          "modalities": { "input": ["text", "image"], "output": ["text"] },
+          "tool_call": true,
+          "reasoning": true
+        },
+        "subscription-bridge-gemini-argon": {
+          "name": "Gemini 4 Argon",
+          "limit": { "context": 1048576, "output": 65536 },
+          "modalities": { "input": ["text", "image"], "output": ["text"] },
+          "tool_call": true,
+          "reasoning": true
         },
 
         "subscription-bridge-chatgpt": {
-          "name": "ChatGPT",
+          "name": "ChatGPT Instant",
           "limit": { "context": 128000, "output": 16384 },
-          "modalities": { "input": ["text", "image"], "output": ["text"] }
+          "modalities": { "input": ["text", "image"], "output": ["text"] },
+          "tool_call": true
+        },
+
+        "subscription-bridge-chatgpt-thinking": {
+          "name": "ChatGPT Thinking",
+          "limit": { "context": 131072, "output": 131072 },
+          "modalities": { "input": ["text", "image"], "output": ["text"] },
+          "tool_call": true
         }
       }
     }
@@ -92,12 +113,25 @@ Recommended configuration:
 
 | Agent Role  | Gemini Option                      | ChatGPT Option                   |
 |-------------|------------------------------------|----------------------------------|
-| `build`     | `subscription-bridge-gemini-pro`   | `subscription-bridge-chatgpt`    |
-| `plan`      | `subscription-bridge-gemini-thinking` | `subscription-bridge-chatgpt` |
-| `explore`   | `subscription-bridge-gemini-fast`  | `subscription-bridge-chatgpt`    |
+| `build`     | `subscription-bridge-gemini-flash` | `subscription-bridge-chatgpt`    |
+| `plan`      | `subscription-bridge-gemini-pro`   | `subscription-bridge-chatgpt`    |
+| `explore`   | `subscription-bridge-gemini-flash-lite` | `subscription-bridge-chatgpt` |
 | `review`    | `subscription-bridge-gemini-pro`   | `subscription-bridge-chatgpt`    |
 
 SubscriptionBridge does not implement subagents. OpenCode manages agents.
+
+### Thinking level variants
+
+Models configured with `"reasoning": true` get automatic **low / medium / high**
+variants in OpenCode. Selecting a variant sends `reasoning_effort` in the request,
+which SubscriptionBridge maps to the Gemini **Thinking level** setting in the browser
+model picker before sending the prompt. Without `reasoning: true`, the browser keeps
+its last thinking level.
+
+ChatGPT has no model picker or granular thinking-level control in its web UI — only a
+composer **Think** toggle button. `subscription-bridge-chatgpt-thinking` maps to turning
+that toggle **on**, and the other ChatGPT models map to turning it **off**, so each model
+is a separate entry rather than a `reasoning: true` variant.
 
 ---
 
@@ -179,10 +213,20 @@ bridge server
 | Model ID | Backend | Context | Output | Browser Required |
 |----------|---------|---------|--------|-----------------|
 | `subscription-bridge-fake` | FakeProviderAdapter | 32K | 8K | No |
-| `subscription-bridge-gemini-fast` | Gemini 3 Flash | 1M | 8K | Yes |
-| `subscription-bridge-gemini-thinking` | Gemini 3 Deep Think | 192K | 64K | Yes |
+| `subscription-bridge-gemini-flash-lite` | Gemini 3.5 Flash-Lite | 1M | 16K | Yes |
+| `subscription-bridge-gemini-flash` | Gemini 3.8 Flash | 1M | 64K | Yes |
 | `subscription-bridge-gemini-pro` | Gemini 3.1 Pro | 1M | 64K | Yes |
-| `subscription-bridge-chatgpt` | ChatGPT (GPT-4o) | 128K | 16K | Yes |
+| `subscription-bridge-gemini-argon` | Gemini 4 Argon | 1M | 64K | Yes |
+| `subscription-bridge-chatgpt` | ChatGPT Instant | 128K | 16K | Yes |
+| `subscription-bridge-chatgpt-thinking` | ChatGPT Thinking | 128K in + 128K out | 128K | Yes |
+| `subscription-bridge-chatgpt-pro` | ChatGPT Pro | 128K | 16K | Yes |
+
+Legacy ids (`subscription-bridge-gemini-fast`, `subscription-bridge-gemini-thinking`)
+are still accepted as aliases and resolve to `gemini-flash` and `gemini-pro`.
+
+When OpenCode compacts a session (the re-sent history shrinks), SubscriptionBridge
+detects the rewrite and restarts the browser chat with the full post-compaction
+transcript, so browser context stays consistent with OpenCode's compacted view.
 
 ---
 

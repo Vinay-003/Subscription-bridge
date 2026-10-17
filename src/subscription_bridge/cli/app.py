@@ -108,8 +108,8 @@ def _ensure_gemini_provider() -> GeminiProviderAdapter:
     pm = _ensure_browser()
     pool = _get_session_pool()
 
-    async def _page_factory() -> Any:
-        return await pm.create_page()
+    async def _page_factory(provider_name: str = "gemini") -> Any:
+        return await pm.create_page(provider_name)
 
     adapter = GeminiProviderAdapter(
         session_pool=pool,
@@ -130,8 +130,8 @@ def _ensure_chatgpt_provider() -> Any:
     pm = _ensure_browser()
     pool = _get_session_pool()
 
-    async def _page_factory() -> Any:
-        return await pm.create_page()
+    async def _page_factory(provider_name: str = "chatgpt") -> Any:
+        return await pm.create_page(provider_name)
 
     adapter = ChatGPTProviderAdapter(
         session_pool=pool,
@@ -441,8 +441,8 @@ async def _ensure_gemini_provider_async() -> GeminiProviderAdapter:
     pm = await _ensure_browser_async()
     pool = _get_session_pool()
 
-    async def _page_factory() -> Any:
-        return await pm.create_page()
+    async def _page_factory(provider_name: str = "gemini") -> Any:
+        return await pm.create_page(provider_name)
 
     adapter = GeminiProviderAdapter(
         session_pool=pool,

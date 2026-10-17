@@ -26,8 +26,10 @@ def test_v1_models(client: TestClient) -> None:
 def test_model_catalog_loads_configured_aliases() -> None:
     from subscription_bridge.api.openai.model_catalog import context_limit_for_model, resolve_model_alias
 
-    assert resolve_model_alias("gemini-2.0-flash") == "subscription-bridge-gemini-fast"
-    assert context_limit_for_model("subscription-bridge-gemini-thinking") == 192000
+    assert resolve_model_alias("gemini-2.0-flash") == "subscription-bridge-gemini-flash-lite"
+    assert resolve_model_alias("subscription-bridge-gemini-fast") == "subscription-bridge-gemini-flash"
+    assert context_limit_for_model("subscription-bridge-gemini-thinking") == 1000000
+    assert context_limit_for_model("subscription-bridge-gemini-flash") == 1048576
 
 
 @pytest.mark.asyncio
@@ -44,13 +46,147 @@ async def test_model_router_resolves_provider_details() -> None:
 
     assert route is not None
     assert route.provider == "gemini"
-    assert route.variant == "Gemini 3 Deep Think"
+    assert route.variant == "3.1 Pro"
     assert provider_metadata("subscription-bridge-gemini-thinking") == {
-        "gemini_model_variant": "Gemini 3 Deep Think",
+        "gemini_model_variant": "3.1 Pro",
         "chatgpt_model_variant": None,
     }
     assert prompt_with_model_hint("hello", "subscription-bridge-gemini-thinking") == "hello"  # no-op: transparent proxy
     assert (await resolve_adapter("subscription-bridge-fake", AppDependencies())).name == "fake"
+
+
+def test_delta_messages_detects_history_rewrite() -> None:
+    from subscription_bridge.api.openai_compat import _conversation_delta, _delta_messages
+    from subscription_bridge.api.openai_models import OpenAIMessage
+
+    conv = "test-conv-rewrite"
+    _conversation_delta.pop(conv, None)
+    m1 = [
+        OpenAIMessage(role="system", content="sys"),
+        OpenAIMessage(role="user", content="u1"),
+    ]
+
+    delta, rewritten = _delta_messages(m1, conv)
+    assert delta == m1
+    assert rewritten is False
+
+    m2 = m1 + [
+        OpenAIMessage(role="assistant", content="a1"),
+        OpenAIMessage(role="user", content="u2"),
+    ]
+    delta, rewritten = _delta_messages(m2, conv)
+    assert delta == m2[2:]
+    assert rewritten is False
+
+    # Client compacted history: message count shrank -> full resend + restart.
+    m3 = [
+        OpenAIMessage(role="system", content="sys"),
+        OpenAIMessage(role="user", content="u1"),
+        OpenAIMessage(role="user", content="summary"),
+    ]
+    delta, rewritten = _delta_messages(m3, conv)
+    assert delta == m3
+    assert rewritten is True
+
+    delta, rewritten = _delta_messages(m2, conv)
+    assert delta == m2[3:]
+    assert rewritten is False
+    _conversation_delta.pop(conv, None)
+
+
+def test_normalize_thinking_level() -> None:
+    from subscription_bridge.api.openai_compat import _normalize_thinking_level
+
+    assert _normalize_thinking_level("low") == "low"
+    assert _normalize_thinking_level("MEDIUM") == "medium"
+    assert _normalize_thinking_level("high") == "high"
+    assert _normalize_thinking_level("minimal") == "low"
+    assert _normalize_thinking_level("none") == "low"
+    assert _normalize_thinking_level("xhigh") == "high"
+    assert _normalize_thinking_level("max") == "high"
+    assert _normalize_thinking_level("weird") is None
+    assert _normalize_thinking_level(None) is None
+
+
+def test_chat_completions_wires_delta_restart_and_thinking_metadata(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from subscription_bridge.api import openai_compat as oc
+    from subscription_bridge.providers.base import ProviderResponse
+
+    captured: list[object] = []
+
+    class CaptureAdapter:
+        name = "fake"
+
+        async def send_prompt(self, request: object) -> ProviderResponse:
+            captured.append(request)
+            return ProviderResponse(
+                provider="fake", text="ok", raw_text="ok", success=True, latency_seconds=0.0,
+            )
+
+    async def fake_resolve(model_id: str, deps: object) -> CaptureAdapter:
+        return CaptureAdapter()
+
+    monkeypatch.setattr(oc, "resolve_adapter", fake_resolve)
+
+    url = "/v1/chat/completions"
+    headers = {"x-opencode-session": "sess-openai-wiring-test"}
+    base = [
+        {"role": "system", "content": "You are a coder."},
+        {"role": "user", "content": "hello world"},
+    ]
+
+    r1 = client.post(
+        url,
+        json={"model": "subscription-bridge-fake", "messages": base, "reasoning_effort": "high"},
+        headers=headers,
+    )
+    assert r1.status_code == 200
+    req1 = captured[-1]
+    assert req1.metadata["thinking_level"] == "high"
+    assert "restart_conversation" not in req1.metadata
+    assert "You are a coder." in req1.system_prompt
+    assert req1.prompt == "User: hello world"
+    assert req1.metadata["full_prompt"] == "User: hello world"
+
+    extended = base + [
+        {"role": "assistant", "content": "hi"},
+        {"role": "user", "content": "second"},
+    ]
+    r2 = client.post(
+        url,
+        json={
+            "model": "subscription-bridge-fake",
+            "messages": extended,
+            "reasoningEffort": "medium",
+        },
+        headers=headers,
+    )
+    assert r2.status_code == 200
+    req2 = captured[-1]
+    assert req2.prompt == "Assistant: hi\nUser: second"
+    assert req2.system_prompt is None
+    assert req2.metadata["thinking_level"] == "medium"
+    assert req2.metadata["full_prompt"] == "User: hello world\nAssistant: hi\nUser: second"
+    assert "restart_conversation" not in req2.metadata
+
+    compacted = [
+        {"role": "system", "content": "You are a coder."},
+        {"role": "user", "content": "hello world"},
+        {"role": "user", "content": "summary of everything so far"},
+    ]
+    r3 = client.post(
+        url,
+        json={"model": "subscription-bridge-fake", "messages": compacted},
+        headers=headers,
+    )
+    assert r3.status_code == 200
+    req3 = captured[-1]
+    assert req3.metadata["restart_conversation"] is True
+    assert "You are a coder." in req3.system_prompt
+    assert req3.prompt == "User: hello world\nUser: summary of everything so far"
+    assert "thinking_level" not in req3.metadata
 
 
 # ── Tool call parsing tests ──────────────────────────────────────────────────

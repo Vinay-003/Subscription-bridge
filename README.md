@@ -216,10 +216,18 @@ Available models:
 | Model ID | Backend | Context | Output | Requires Browser |
 |----------|---------|---------|--------|-----------------|
 | `subscription-bridge-fake` | FakeProviderAdapter | 32K | 8K | No |
-| `subscription-bridge-gemini-fast` | Gemini 3 Flash | 1M | 8K | Yes |
-| `subscription-bridge-gemini-thinking` | Gemini 3 Deep Think | 192K | 64K | Yes |
+| `subscription-bridge-gemini-flash-lite` | Gemini 3.5 Flash-Lite | 1M | 16K | Yes |
+| `subscription-bridge-gemini-flash` | Gemini 3.8 Flash | 1M | 64K | Yes |
 | `subscription-bridge-gemini-pro` | Gemini 3.1 Pro | 1M | 64K | Yes |
-| `subscription-bridge-chatgpt` | ChatGPT (GPT-4o) | 128K | 16K | Yes |
+| `subscription-bridge-gemini-argon` | Gemini 4 Argon | 1M | 64K | Yes |
+| `subscription-bridge-chatgpt` | ChatGPT Instant | 128K | 16K | Yes |
+| `subscription-bridge-chatgpt-thinking` | ChatGPT Thinking | 128K | 128K | Yes |
+| `subscription-bridge-chatgpt-pro` | ChatGPT Pro | 128K | 16K | Yes |
+
+Gemini models accept `reasoning_effort` (`low` / `medium` / `high`), which sets the
+browser's Thinking level before each prompt. Legacy ids
+(`subscription-bridge-gemini-fast`, `subscription-bridge-gemini-thinking`) resolve
+to `gemini-flash` and `gemini-pro`.
 
 ### File / Image Upload
 

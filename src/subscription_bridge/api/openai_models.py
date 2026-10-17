@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 
 class OpenAIMessage(BaseModel):
@@ -24,6 +24,8 @@ class ToolCall(BaseModel):
 
 
 class ChatCompletionRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     model: str = "subscription-bridge-fake"
     messages: list[OpenAIMessage] = Field(default_factory=list, min_length=1)
     temperature: float | None = 0.2
@@ -32,7 +34,10 @@ class ChatCompletionRequest(BaseModel):
     stream_options: dict[str, Any] | None = None
     parallel_tool_calls: bool | None = None
     response_format: dict[str, Any] | None = None
-    reasoning_effort: str | None = None
+    reasoning_effort: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("reasoning_effort", "reasoningEffort"),
+    )
     stream: bool = False
     top_p: float | None = None
     frequency_penalty: float | None = None

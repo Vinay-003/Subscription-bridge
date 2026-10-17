@@ -312,6 +312,39 @@ def test_extract_model_variant_from_non_first_line() -> None:
     assert _extract_model_variant(request) == "Gemini 3 Flash"
 
 
+def test_extract_thinking_level_from_metadata() -> None:
+    from subscription_bridge.providers.gemini.adapter import _extract_thinking_level
+
+    def req(meta: dict[str, object] | None = None) -> ProviderRequest:
+        return ProviderRequest(run_id="r", prompt="p", metadata=meta or {})
+
+    assert _extract_thinking_level(req({"thinking_level": "high"})) == "high"
+    assert _extract_thinking_level(req({"thinking_level": "MINIMAL"})) == "low"
+    assert _extract_thinking_level(req({"gemini_thinking_level": "xhigh"})) == "high"
+    assert _extract_thinking_level(req({"thinking_level": "bogus"})) is None
+    assert _extract_thinking_level(req()) is None
+    assert _extract_thinking_level(req({"gemini_thinking": True})) is None
+
+
+def test_variant_select_labels_prefer_exact_name() -> None:
+    from subscription_bridge.providers.gemini.adapter import (
+        _variant_label_matches,
+        _variant_select_labels,
+    )
+
+    labels = _variant_select_labels("3.8 Flash")
+    assert labels[0] == "3.8 flash"
+    # Generic "flash" must come after the exact name to avoid hitting Flash-Lite.
+    lite_labels = _variant_select_labels("3.5 Flash-Lite")
+    assert lite_labels[0] == "3.5 flash-lite"
+
+    assert _variant_label_matches("3.8 Flash", "3.8 Flash") is True
+    assert _variant_label_matches("3.8 Flash", "3.5 Flash-Lite") is False
+    assert _variant_label_matches("Gemini 3 Flash", "3.8 Flash") is True
+    assert _variant_label_matches("4 Argon", "4 Argon") is True
+    assert _variant_label_matches("3.1 Pro", "4 Argon") is False
+
+
 @pytest.mark.asyncio
 async def test_switch_model_variant_clicks_menu_and_option() -> None:
     page = ModelSwitchPage(should_click=True)
@@ -343,6 +376,63 @@ async def test_detect_model_label_reads_visible_text() -> None:
     page = ModelSwitchPage(should_click=True)
     label = await _detect_model_label(page)
     assert "Gemini" in label
+
+
+@pytest.mark.asyncio
+async def test_wait_for_ui_ready_true_when_page_ready_and_picker_visible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from subscription_bridge.providers.gemini import adapter as gem
+
+    async def fake_ready(page: object) -> dict[str, object]:
+        return {"ready": True}
+
+    monkeypatch.setattr(gem, "check_gemini_ready", fake_ready)
+    assert await gem._wait_for_ui_ready(FakePage(), timeout_seconds=1.0) is True
+
+
+@pytest.mark.asyncio
+async def test_wait_for_ui_ready_keeps_waiting_while_composer_ready_but_picker_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from subscription_bridge.providers.gemini import adapter as gem
+
+    class HiddenPickerLocator(FakeLocator):
+        async def is_visible(self) -> bool:
+            return False
+
+        async def count(self) -> int:
+            return 0
+
+    class HiddenPickerPage(FakePage):
+        def locator(self, selector: str) -> FakeLocator:
+            return HiddenPickerLocator(selector)
+
+    async def fake_ready(page: object) -> dict[str, object]:
+        return {"ready": True}
+
+    monkeypatch.setattr(gem, "check_gemini_ready", fake_ready)
+    assert (
+        await gem._wait_for_ui_ready(HiddenPickerPage(), timeout_seconds=0.6) is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_wait_for_ui_ready_stops_on_persistent_needs_login(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from subscription_bridge.providers.gemini import adapter as gem
+
+    async def fake_login(page: object) -> dict[str, object]:
+        return {"needs_login": True}
+
+    monkeypatch.setattr(gem, "check_gemini_ready", fake_login)
+    assert (
+        await gem._wait_for_ui_ready(
+            FakePage(), timeout_seconds=1.0, login_grace_seconds=0.0
+        )
+        is False
+    )
 
 
 def test_clean_assistant_text_filters_stopped_message() -> None:

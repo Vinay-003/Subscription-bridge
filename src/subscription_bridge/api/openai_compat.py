@@ -53,8 +53,8 @@ router = APIRouter()
 _conversation_delta: dict[str, int] = {}
 
 
-def _delta_messages(messages: list[Any], conversation_id: str) -> list[Any]:
-    """Return only the messages that are new since the last request for this conversation.
+def _delta_messages(messages: list[Any], conversation_id: str) -> tuple[list[Any], bool]:
+    """Return the messages to forward plus whether the client rewrote history.
 
     OpenCode re-sends the entire message list every turn. The browser chat
     already contains prior turns, so forwarding the full list causes the
@@ -63,19 +63,21 @@ def _delta_messages(messages: list[Any], conversation_id: str) -> list[Any]:
 
     Strategy: track how many messages we last sent. On the next request,
     send only the tail beyond that count. If the client rewrote/compacted
-    history (count <= last_count), send everything again.
+    history (count <= last_count), the browser chat is stale (e.g. OpenCode
+    summarized the context) — send everything and ask the adapters to open
+    a fresh browser chat.
     """
     count = len(messages)
     last_count = _conversation_delta.get(conversation_id, 0)
 
     if count <= last_count:
-        # History was rewritten or compacted — send everything.
+        # History was rewritten or compacted — restart the browser chat.
         _conversation_delta[conversation_id] = count
-        return messages
+        return messages, True
 
     delta = messages[last_count:]
     _conversation_delta[conversation_id] = count
-    return delta
+    return delta, False
 
 def _get_deps(request: Request) -> AppDependencies:
     deps: AppDependencies = request.app.state.deps
@@ -100,6 +102,28 @@ def _error_json(
 
 def _estimate_tokens(text: str) -> int:
     return len(text) // 4 + 1
+
+
+_THINKING_LEVELS = {"low", "medium", "high"}
+
+
+def _normalize_thinking_level(reasoning_effort: str | None) -> str | None:
+    """Map OpenAI reasoning_effort values onto browser thinking levels.
+
+    OpenCode variants for openai-compatible providers emit low/medium/high.
+    Other clients may send OpenAI's extended set; clamp those to our three
+    browser-controllable levels.
+    """
+    if not reasoning_effort:
+        return None
+    level = str(reasoning_effort).strip().lower()
+    if level in _THINKING_LEVELS:
+        return level
+    if level in ("none", "minimal"):
+        return "low"
+    if level in ("xhigh", "max"):
+        return "high"
+    return None
 
 
 def _strip_provider_prefix(model_id: str) -> str:
@@ -259,6 +283,8 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
         workspace_header=request.headers.get("x-workspace-root") or request.headers.get("x-workspace"),
         # Never log message contents: requests may contain credentials or source code.
         body_bytes=len(_json.dumps(body, ensure_ascii=False).encode("utf-8")),
+        body_keys=sorted(body.keys()),
+        reasoning_effort=body.get("reasoning_effort") or body.get("reasoningEffort"),
     )
 
     try:
@@ -305,17 +331,27 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
     conversation_id = _conversation_id(req.messages, request)
     # Only forward NEW messages to the browser. The browser chat already has
     # prior turns; re-sending full history causes double context bloat.
-    delta_msgs = _delta_messages(req.messages, conversation_id)
+    delta_msgs, history_rewritten = _delta_messages(req.messages, conversation_id)
     is_first_request = len(delta_msgs) == len(req.messages)
     prompt, system_prompt = _convert_messages(
         delta_msgs, req.tools if has_tools else None,
         tool_choice=req.tool_choice,
         require_json_tools=has_tools,
     )
+    # Full transcript for the browser chat: used on the first turn and whenever
+    # OpenCode compacts/rewrites history so the fresh browser chat gets the
+    # post-compaction context (including the summary) in one message.
+    full_prompt, full_system_prompt = _convert_messages(
+        req.messages, req.tools if has_tools else None,
+        tool_choice=req.tool_choice,
+        require_json_tools=has_tools,
+    )
     # System prompt is only needed on the first turn; the browser chat
     # persists it. On delta turns the adapter skips system_prompt anyway.
-    if not is_first_request:
+    if not is_first_request and not history_rewritten:
         system_prompt = ""
+    if history_rewritten:
+        system_prompt = full_system_prompt
 
     workspace_resolution = resolve_workspace(req, request)
     log.info("workspace_resolved", workspace=workspace_resolution.path, source=workspace_resolution.source)
@@ -325,6 +361,18 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
         if isinstance(msg.content, list):
             attachments.extend(_extract_images_from_content(msg.content))
 
+    provider_metadata_dict: dict[str, Any] = {
+        **provider_metadata(req.model),
+        "isolated_conversation": True,
+        "full_prompt": full_prompt,
+    }
+    if history_rewritten:
+        provider_metadata_dict["restart_conversation"] = True
+        log.info("history_rewritten_restart", conversation_id=conversation_id, msg_count=len(req.messages))
+    thinking_level = _normalize_thinking_level(req.reasoning_effort)
+    if thinking_level:
+        provider_metadata_dict["thinking_level"] = thinking_level
+
     provider_req = ProviderRequest(
         run_id=conversation_id,
         prompt=prompt,
@@ -332,7 +380,7 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
         attachments=attachments or None,
         require_json=has_tools,
         timeout_seconds=max((req.max_completion_tokens or req.max_tokens or 1024) // 100, 30),
-        metadata={**provider_metadata(req.model), "isolated_conversation": True},
+        metadata=provider_metadata_dict,
     )
 
     if req.stream:

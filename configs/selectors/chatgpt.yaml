@@ -48,9 +48,9 @@ selectors:
     - "button[aria-label*='Add photos']"
     - "button[aria-label*='Add files']"
 
-  model_toggle:
-    - "button[data-testid='model-switcher']"
-    - "button[aria-label*='model']"
+  thinking_toggle:
+    - "button:has-text('Think')"
+    - "button[aria-pressed][data-state]"
 
 unsafe_click_words:
   - "share conversation"
