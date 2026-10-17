@@ -16,9 +16,11 @@ class SessionPool:
         self,
         max_sessions: int = 3,
         session_ttl_seconds: float = 600.0,
+        page_manager: Any = None,
     ) -> None:
         self._max_sessions = max_sessions
         self._session_ttl = session_ttl_seconds
+        self._page_manager = page_manager
         self._sessions: dict[str, TabSession] = {}
         self._acquire_lock = asyncio.Lock()
 
@@ -68,6 +70,11 @@ class SessionPool:
                         # provider-side chat history must be reset by the adapter.
                         idle.has_active_conversation = False
                         idle.selected_model_variant = None
+                        idle.thinking_level = None
+                        # A stale model id would make the next request believe the
+                        # tab already served a different model and force a restart
+                        # the adapter does not drive, which then crashes the tab.
+                        idle.served_model_id = None
                     idle.mark_busy(run_id, replace_owner=True)
                     return idle
                 self._sessions.pop(idle.session_id, None)
@@ -96,7 +103,11 @@ class SessionPool:
             raise SessionPoolError(msg)
 
         page = await self._make_page(page_factory, provider_name)
-        session = TabSession(provider_name=provider_name, page=page)
+        session = TabSession(
+            provider_name=provider_name,
+            page=page,
+            page_manager=self._page_manager,
+        )
         await session.operation_lock.acquire()
         session.mark_busy(run_id)
         self._sessions[session.session_id] = session
@@ -131,6 +142,8 @@ class SessionPool:
             session.owner_run_id = None
             session.has_active_conversation = False
             session.selected_model_variant = None
+            session.thinking_level = None
+            session.served_model_id = None
         finally:
             session.operation_lock.release()
 

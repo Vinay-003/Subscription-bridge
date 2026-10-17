@@ -71,7 +71,11 @@ class AppDependencies:
             await self._playwright_manager.start()
             max_sessions = int(browser_config.get("max_sessions", 3))
             ttl = float(browser_config.get("session_ttl_seconds", 600))
-            self._session_pool = SessionPool(max_sessions=max_sessions, session_ttl_seconds=ttl)
+            self._session_pool = SessionPool(
+                max_sessions=max_sessions,
+                session_ttl_seconds=ttl,
+                page_manager=self._playwright_manager,
+            )
             self._browser_started = True
 
     async def get_gemini_adapter(self) -> GeminiProviderAdapter:

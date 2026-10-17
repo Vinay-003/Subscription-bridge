@@ -210,6 +210,14 @@ class PlaywrightManager:
         await self._open_provider_url(page, provider_url)
         return page
 
+    def unclaim_page(self, page: Any) -> None:
+        """Release a tab so a later create_page() may reuse or replace it.
+
+        Sessions close their page on eviction/crash; without this the claimed
+        id lingers and every subsequent session opens a fresh tab instead.
+        """
+        self._claimed_pages.discard(id(page))
+
     async def _open_provider_url(self, page: Any, url: str | None) -> None:
         """Send a just-claimed blank tab to the provider app.
 

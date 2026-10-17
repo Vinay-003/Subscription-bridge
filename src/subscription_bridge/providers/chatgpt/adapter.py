@@ -50,6 +50,8 @@ class ChatGPTProviderAdapter(ProviderAdapter):
             # start a fresh chat and resend the post-compaction transcript.
             if (request.metadata or {}).get("restart_conversation"):
                 session.has_active_conversation = False
+                session.selected_model_variant = None
+                session.served_model_id = None
 
             # The catalog model changed (e.g. chatgpt -> chatgpt-thinking). Each
             # model brings its own system prompt, and the browser tab may be
@@ -69,7 +71,7 @@ class ChatGPTProviderAdapter(ProviderAdapter):
                     run_id=request.run_id,
                 )
                 session.has_active_conversation = False
-            if requested_model:
+                session.selected_model_variant = None
                 session.served_model_id = requested_model
 
             # The system/tool instructions are injected once per browser chat.

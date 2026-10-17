@@ -76,6 +76,9 @@ class GeminiProviderAdapter(ProviderAdapter):
             # start a fresh chat and resend the post-compaction transcript.
             if (request.metadata or {}).get("restart_conversation"):
                 session.has_active_conversation = False
+                session.selected_model_variant = None
+                session.thinking_level = None
+                session.served_model_id = None
 
             # The catalog model changed (e.g. flash -> pro). Each model brings its
             # own system prompt, and the browser tab may be reused across models,
@@ -94,7 +97,8 @@ class GeminiProviderAdapter(ProviderAdapter):
                     run_id=request.run_id,
                 )
                 session.has_active_conversation = False
-            if requested_model:
+                session.selected_model_variant = None
+                session.thinking_level = None
                 session.served_model_id = requested_model
 
             # On a fresh/reset browser chat, restore the full OpenCode transcript;

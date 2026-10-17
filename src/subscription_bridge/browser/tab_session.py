@@ -23,10 +23,12 @@ class TabSession:
         self,
         provider_name: str,
         page: Any,
+        page_manager: Any = None,
     ) -> None:
         self.session_id: str = f"tab-{uuid.uuid4().hex[:12]}"
         self.provider_name: str = provider_name
         self._page: Any = page
+        self._page_manager: Any = page_manager
         self.created_at: float = time.monotonic()
         self.last_used_at: float = self.created_at
         self.state: SessionState = SessionState.IDLE
@@ -77,6 +79,11 @@ class TabSession:
         self.selected_model_variant = None
         self.thinking_level = None
         self.last_used_at = time.monotonic()
+        if self._page_manager is not None:
+            try:
+                self._page_manager.unclaim_page(self._page)
+            except Exception:
+                pass
         try:
             await self._page.close()
         except Exception:

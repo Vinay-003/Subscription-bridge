@@ -266,3 +266,44 @@ async def test_make_page_calls_legacy_zero_arg_factory() -> None:
     result = await SessionPool._make_page(factory, "gemini")
 
     assert result == "page"
+
+
+class FakePageManager:
+    def __init__(self) -> None:
+        self.unclaimed: list[int] = []
+
+    def unclaim_page(self, page: FakePage) -> None:
+        self.unclaimed.append(id(page))
+
+
+@pytest.mark.asyncio
+async def test_close_unclaims_page_for_reuse() -> None:
+    manager = FakePageManager()
+    pool = SessionPool(max_sessions=1, session_ttl_seconds=600.0, page_manager=manager)
+
+    first = await pool.acquire("test", "run-001", _page_factory)
+    first_page = first.page
+    await pool.close(first.session_id)
+
+    assert id(first_page) in manager.unclaimed
+    assert first_page._closed is True
+
+
+@pytest.mark.asyncio
+async def test_cross_run_reuse_clears_stale_model_state() -> None:
+    pool = SessionPool(max_sessions=3, session_ttl_seconds=600.0)
+
+    first = await pool.acquire("test", "run-001", _page_factory)
+    first.has_active_conversation = True
+    first.selected_model_variant = "3.1 Pro"
+    first.thinking_level = "high"
+    first.served_model_id = "subscription-bridge-gemini-pro"
+    await pool.release(first.session_id)
+
+    second = await pool.acquire("test", "run-002", _page_factory)
+
+    assert second.session_id == first.session_id
+    assert second.has_active_conversation is False
+    assert second.selected_model_variant is None
+    assert second.thinking_level is None
+    assert second.served_model_id is None

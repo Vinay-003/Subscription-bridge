@@ -84,7 +84,11 @@ def _ensure_browser() -> PlaywrightManager:
         run_async(_playwright_manager.start())
         max_sessions = int(browser_config.get("max_sessions", 3))
         ttl = float(browser_config.get("session_ttl_seconds", 600))
-        _session_pool = SessionPool(max_sessions=max_sessions, session_ttl_seconds=ttl)
+        _session_pool = SessionPool(
+            max_sessions=max_sessions,
+            session_ttl_seconds=ttl,
+            page_manager=_playwright_manager,
+        )
     return _playwright_manager
 
 
@@ -95,7 +99,11 @@ def _get_session_pool() -> SessionPool:
         browser_config = config.get("browser", {})
         max_sessions = int(browser_config.get("max_sessions", 3))
         ttl = float(browser_config.get("session_ttl_seconds", 600))
-        _session_pool = SessionPool(max_sessions=max_sessions, session_ttl_seconds=ttl)
+        _session_pool = SessionPool(
+            max_sessions=max_sessions,
+            session_ttl_seconds=ttl,
+            page_manager=_ensure_browser(),
+        )
     return _session_pool
 
 
@@ -427,7 +435,11 @@ async def _ensure_browser_async() -> PlaywrightManager:
         await _playwright_manager.start()
         max_sessions = int(browser_config.get("max_sessions", 3))
         ttl = float(browser_config.get("session_ttl_seconds", 600))
-        _session_pool = SessionPool(max_sessions=max_sessions, session_ttl_seconds=ttl)
+        _session_pool = SessionPool(
+            max_sessions=max_sessions,
+            session_ttl_seconds=ttl,
+            page_manager=_playwright_manager,
+        )
     return _playwright_manager
 
 
