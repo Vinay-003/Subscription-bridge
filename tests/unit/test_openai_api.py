@@ -170,6 +170,7 @@ def test_chat_completions_wires_delta_restart_and_thinking_metadata(
     client: TestClient, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from subscription_bridge.api import openai_compat as oc
+    from subscription_bridge.api.openai.message_converter import delta_reference_note
     from subscription_bridge.providers.base import ProviderResponse
 
     captured: list[object] = []
@@ -223,7 +224,7 @@ def test_chat_completions_wires_delta_restart_and_thinking_metadata(
     )
     assert r2.status_code == 200
     req2 = captured[-1]
-    assert req2.prompt == "Assistant: hi\nUser: second"
+    assert req2.prompt == "Assistant: hi\nUser: second" + delta_reference_note(False)
     assert req2.system_prompt is None
     assert req2.metadata["thinking_level"] == "medium"
     assert req2.metadata["full_prompt"] == "User: hello world\nAssistant: hi\nUser: second"
@@ -408,6 +409,53 @@ def test_chat_completions_sends_bounded_reminder_after_compaction(
     assert len(reminder) < len(full_first_turn) // 2
     assert "skill-0" not in reminder
     assert "You have access to tools." in reminder
+
+
+def test_chat_completions_appends_reference_note_on_delta_turns(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from subscription_bridge.api.openai.message_converter import delta_reference_note
+
+    captured = _capture_adapter(monkeypatch)
+    system_prompt = _opencode_like_system_prompt()
+    tools = [{"type": "function", "function": {"name": "bash", "parameters": {"type": "object"}}}]
+    headers = {"x-opencode-session": "sess-delta-reference"}
+
+    client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "subscription-bridge-fake",
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": "what directory are we in"},
+            ],
+            "tools": tools,
+        },
+        headers=headers,
+    )
+    assert "[Reminder" not in captured[-1].prompt
+
+    r = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "subscription-bridge-fake",
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": "what directory are we in"},
+                {"role": "assistant", "content": "/home/mylappy/Projects"},
+                {"role": "user", "content": "list all items in this directory"},
+            ],
+            "tools": tools,
+        },
+        headers=headers,
+    )
+    assert r.status_code == 200
+    prompt = captured[-1].prompt
+    assert captured[-1].system_prompt is None
+    assert prompt.startswith("Assistant: /home/mylappy/Projects")
+    assert prompt.endswith(delta_reference_note(True))
+    assert "no access to local files" in prompt
+    assert '{"tool_calls": [{"function": {"name": "<tool name from the first message>"' in prompt
 
 
 # ── Tool call parsing tests ──────────────────────────────────────────────────

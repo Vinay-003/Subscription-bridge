@@ -5,6 +5,7 @@ from subscription_bridge.api.openai.message_converter import (
     SYSTEM_CONTEXT_TAG,
     SYSTEM_CONTRACT_TAG,
     compact_system_prompt,
+    delta_reference_note,
     render_system_prompt,
     split_system_prompt,
 )
@@ -106,3 +107,20 @@ def test_compact_short_prompt_keeps_content() -> None:
     compacted = compact_system_prompt("You are a coder.")
     assert "You are a coder." in compacted
     assert "Earlier conversation turns" in compacted
+
+
+def test_delta_reference_note_with_tools_points_at_first_message() -> None:
+    note = delta_reference_note(True)
+    assert note.startswith("\n\n[Reminder")
+    assert "first message" in note
+    assert f"<{SYSTEM_CONTEXT_TAG}>" in note
+    assert f"<{SYSTEM_CONTRACT_TAG}>" in note
+    assert '{"tool_calls": [{"function": {"name": "<tool name from the first message>"' in note
+    assert "no access to local files" in note
+
+
+def test_delta_reference_note_without_tools_omits_tool_contract() -> None:
+    note = delta_reference_note(False)
+    assert note.startswith("\n\n[Reminder")
+    assert "tool_calls" not in note
+    assert SYSTEM_CONTRACT_TAG in note

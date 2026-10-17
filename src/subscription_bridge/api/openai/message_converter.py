@@ -163,6 +163,41 @@ def compact_system_prompt(system_prompt: str) -> str:
     return _COMPACT_HEADER + compacted
 
 
+_DELTA_REFERENCE_HEADER = "[Reminder - still in effect from the first message of this conversation]"
+
+_DELTA_REFERENCE_SYSTEM = (
+    "The system prompt sent in the first message "
+    f"(<{SYSTEM_CONTEXT_TAG}> and <{SYSTEM_CONTRACT_TAG}>) applies to this entire "
+    "session: follow it exactly, as if it had just been sent."
+)
+
+_DELTA_REFERENCE_TOOLS = (
+    "You also have tool access: the tool definitions and the JSON tool-call "
+    "contract from the first message remain in force. For ANY request that needs "
+    "local information - file contents, directory listings, search, or running "
+    "commands - respond with a tool call in exactly this format and nothing else:\n"
+    '{"tool_calls": [{"function": {"name": "<tool name from the first message>", '
+    '"arguments": {"<arg>": "<value>"}}}]}\n'
+    "Never tell the user you have no access to local files or a terminal; you "
+    "operate those tools yourself."
+)
+
+
+def delta_reference_note(has_tools: bool) -> str:
+    """Reference block appended to every browser message after the first turn.
+
+    The system prompt and tool contract are delivered once, inside message 1.
+    Later turns carry only the conversation delta, and the browser model drifts
+    back to a generic assistant persona (e.g. claiming it cannot touch the
+    filesystem). Re-pointing at message 1 on every follow-up keeps the agent
+    contract binding for the whole session.
+    """
+    paragraphs = [_DELTA_REFERENCE_HEADER, _DELTA_REFERENCE_SYSTEM]
+    if has_tools:
+        paragraphs.append(_DELTA_REFERENCE_TOOLS)
+    return "\n\n" + "\n\n".join(paragraphs)
+
+
 def _midpoint_split(text: str) -> tuple[str, str]:
     midpoint = len(text) // 2
     cut = text.rfind("\n\n", 0, midpoint)

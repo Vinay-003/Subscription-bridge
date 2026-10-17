@@ -15,6 +15,7 @@ from subscription_bridge.api.openai.message_converter import (
     cleanup_temp_files,
     compact_system_prompt,
     convert_messages,
+    delta_reference_note,
     extract_images_from_content,
     extract_text,
     render_system_prompt,
@@ -355,7 +356,8 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
         require_json_tools=has_tools,
     )
     # System prompt is only needed on the first turn; the browser chat
-    # persists it. On delta turns the adapter skips system_prompt anyway.
+    # persists it. On delta turns the adapter skips system_prompt anyway, so
+    # the first-turn reminder is appended to the delta text instead.
     # The first turn is delivered as two labelled sections so the browser model
     # separates background context from the operating contract. After compaction
     # the original prompt must not be re-sent in full: only a bounded reminder.
@@ -365,6 +367,8 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
         system_prompt = render_system_prompt(system_prompt)
     else:
         system_prompt = ""
+        if prompt.strip():
+            prompt = f"{prompt}{delta_reference_note(has_tools)}"
 
     workspace_resolution = resolve_workspace(req, request)
     log.info("workspace_resolved", workspace=workspace_resolution.path, source=workspace_resolution.source)
