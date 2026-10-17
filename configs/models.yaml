@@ -14,6 +14,8 @@ models:
     label: Gemini 3.5 Flash-Lite (Browser)
     context_limit: 1048576
     output_limit: 16384
+    reasoning: true
+    reasoning_efforts: [low, medium, high]
     capabilities:
       input: [text, image]
       output: [text]
@@ -24,6 +26,8 @@ models:
     label: Gemini 3.8 Flash (Browser)
     context_limit: 1048576
     output_limit: 65536
+    reasoning: true
+    reasoning_efforts: [low, medium, high]
     capabilities:
       input: [text, image]
       output: [text]
@@ -34,6 +38,8 @@ models:
     label: Gemini 3.1 Pro (Browser)
     context_limit: 1000000
     output_limit: 65536
+    reasoning: true
+    reasoning_efforts: [low, medium, high]
     capabilities:
       input: [text, image]
       output: [text]
@@ -44,6 +50,8 @@ models:
     label: Gemini 4 Argon (Browser)
     context_limit: 1048576
     output_limit: 65536
+    reasoning: true
+    reasoning_efforts: [low, medium, high]
     capabilities:
       input: [text, image]
       output: [text]

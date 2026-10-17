@@ -62,7 +62,12 @@ Add the following to your OpenCode configuration (e.g., `~/.config/opencode/open
           "limit": { "context": 1048576, "output": 65536 },
           "modalities": { "input": ["text", "image"], "output": ["text"] },
           "tool_call": true,
-          "reasoning": true
+          "reasoning": true,
+          "variants": {
+            "low":    { "reasoningEffort": "low" },
+            "medium": { "reasoningEffort": "medium" },
+            "high":   { "reasoningEffort": "high" }
+          }
         },
 
         "subscription-bridge-chatgpt": {
@@ -122,11 +127,23 @@ SubscriptionBridge does not implement subagents. OpenCode manages agents.
 
 ### Thinking level variants
 
-Models configured with `"reasoning": true` get automatic **low / medium / high**
-variants in OpenCode. Selecting a variant sends `reasoning_effort` in the request,
-which SubscriptionBridge maps to the Gemini **Thinking level** setting in the browser
-model picker before sending the prompt. Without `reasoning: true`, the browser keeps
-its last thinking level.
+Models with a `"variants"` object get a reasoning-effort dropdown in the OpenCode model
+picker. Each variant maps to a `reasoningEffort` value (`low` / `medium` / `high`), which
+SubscriptionBridge reads from the request and applies as the Gemini **Thinking level** in
+the browser model picker before sending the prompt. The top-level `"reasoning": true`
+flag marks the model as reasoning-capable; the `variants` entries are what actually
+produce the selectable efforts. Without a matching effort, the browser keeps its last
+thinking level.
+
+Recommended `variants` block (identical for all four Gemini models):
+
+```json
+"variants": {
+  "low":    { "reasoningEffort": "low" },
+  "medium": { "reasoningEffort": "medium" },
+  "high":   { "reasoningEffort": "high" }
+}
+```
 
 ChatGPT has no model picker or granular thinking-level control in its web UI — only a
 composer **Think** toggle button. `subscription-bridge-chatgpt-thinking` maps to turning

@@ -50,10 +50,16 @@ class ChatCompletionRequest(BaseModel):
 
 
 class OpenAIModel(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     id: str
     object: str = "model"
     created: int = 0
     owned_by: str = "subscription-bridge"
+    context_window: int | None = Field(default=None, alias="context_window")
+    max_output_tokens: int | None = Field(default=None, alias="max_output_tokens")
+    reasoning: bool = False
+    reasoning_efforts: list[str] = Field(default_factory=list)
 
 
 class ModelList(BaseModel):

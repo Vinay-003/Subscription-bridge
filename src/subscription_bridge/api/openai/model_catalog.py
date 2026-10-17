@@ -60,8 +60,16 @@ DEFAULT_MODEL_OUTPUT_LIMITS: dict[str, int] = {
     MODEL_GEMINI_PRO: 65536,
     MODEL_GEMINI_ARGON: 65536,
     MODEL_CHATGPT: 16384,
-    MODEL_CHATGPT_THINKING: 131_072,
+    MODEL_CHATGPT_THINKING: 131072,
     MODEL_CHATGPT_PRO: 16384,
+}
+
+DEFAULT_MODEL_REASONING_LEVELS: dict[str, list[str]] = {
+    MODEL_GEMINI_FLASH_LITE: ["low", "medium", "high"],
+    MODEL_GEMINI_FLASH: ["low", "medium", "high"],
+    MODEL_GEMINI_PRO: ["low", "medium", "high"],
+    MODEL_GEMINI_ARGON: ["low", "medium", "high"],
+    MODEL_CHATGPT_THINKING: ["low", "medium", "high"],
 }
 
 
@@ -70,11 +78,26 @@ def build_models() -> list[OpenAIModel]:
 
     Tool definitions belong on each chat-completions request; OpenCode owns its
     tool registry and execution loop. Native bridge routes keep their own tools.
+    Each model carries context_window/max_output_tokens so clients that rely on
+    the models endpoint (not just opencode.json) can budget tokens and compaction.
     """
     config_models = _configured_models()
-    if config_models:
-        return [OpenAIModel(id=model_id, owned_by="subscription-bridge") for model_id in config_models]
-    return [OpenAIModel(id=model_id, owned_by="subscription-bridge") for model_id in _default_model_ids()]
+    model_ids = list(config_models) if config_models else _default_model_ids()
+    return [_model_entry(model_id, config_models.get(model_id, {})) for model_id in model_ids]
+
+
+def _model_entry(model_id: str, cfg: dict[str, Any]) -> OpenAIModel:
+    context_limit = int(cfg.get("context_limit") or DEFAULT_MODEL_CONTEXT_LIMITS.get(model_id, 131072))
+    output_limit = int(cfg.get("output_limit") or DEFAULT_MODEL_OUTPUT_LIMITS.get(model_id, 16384))
+    levels = reasoning_levels_for_model(model_id)
+    return OpenAIModel(
+        id=model_id,
+        owned_by="subscription-bridge",
+        context_window=context_limit,
+        max_output_tokens=output_limit,
+        reasoning=bool(levels),
+        reasoning_efforts=levels,
+    )
 
 
 def build_native_tool_definitions() -> list[dict[str, Any]]:
@@ -168,6 +191,26 @@ def output_limit_for_model(model_id: str) -> int | None:
     if configured and configured.get("output_limit") is not None:
         return int(configured["output_limit"])
     return DEFAULT_MODEL_OUTPUT_LIMITS.get(model)
+
+
+def reasoning_levels_for_model(model_id: str) -> list[str]:
+    """Reasoning effort levels a model accepts (empty list = no reasoning).
+
+    Configured ``reasoning_efforts`` wins; otherwise the default table applies.
+    These are the low/medium/high options OpenCode surfaces as a dropdown when
+    a model declares ``variants`` for each effort.
+    """
+    model = strip_provider_prefix(resolve_model_alias(model_id))
+    configured = _configured_models().get(model)
+    if configured:
+        if configured.get("reasoning") is False:
+            return []
+        efforts = configured.get("reasoning_efforts")
+        if isinstance(efforts, list) and efforts:
+            return [str(level).lower() for level in efforts]
+        if configured.get("reasoning") is True:
+            return DEFAULT_MODEL_REASONING_LEVELS.get(model, ["low", "medium", "high"])
+    return list(DEFAULT_MODEL_REASONING_LEVELS.get(model, []))
 
 
 def gemini_model_variant(model_id: str) -> str:

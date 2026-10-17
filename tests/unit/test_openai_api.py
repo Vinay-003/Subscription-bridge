@@ -21,6 +21,10 @@ def test_v1_models(client: TestClient) -> None:
     assert len(data["data"]) >= 1
     model_ids = [m["id"] for m in data["data"]]
     assert "subscription-bridge-fake" in model_ids
+    # Models advertise context_window so any OpenAI client can budget tokens/compaction.
+    flash = next(m for m in data["data"] if m["id"] == "subscription-bridge-gemini-flash")
+    assert flash["context_window"] == 1048576
+    assert flash["reasoning"] is True
 
 
 def test_model_catalog_loads_configured_aliases() -> None:
@@ -30,6 +34,29 @@ def test_model_catalog_loads_configured_aliases() -> None:
     assert resolve_model_alias("subscription-bridge-gemini-fast") == "subscription-bridge-gemini-flash"
     assert context_limit_for_model("subscription-bridge-gemini-thinking") == 1000000
     assert context_limit_for_model("subscription-bridge-gemini-flash") == 1048576
+
+
+def test_build_models_emits_context_window_and_reasoning() -> None:
+    from subscription_bridge.api.openai.model_catalog import build_models
+
+    models = {m.id: m for m in build_models()}
+    flash = models["subscription-bridge-gemini-flash"]
+    assert flash.context_window == 1048576
+    assert flash.max_output_tokens == 65536
+    assert flash.reasoning is True
+    assert flash.reasoning_efforts == ["low", "medium", "high"]
+
+    fake = models["subscription-bridge-fake"]
+    assert fake.context_window == 32000
+    assert fake.reasoning is False
+    assert fake.reasoning_efforts == []
+
+
+def test_reasoning_levels_for_model_defaults_and_overrides() -> None:
+    from subscription_bridge.api.openai.model_catalog import reasoning_levels_for_model
+
+    assert reasoning_levels_for_model("subscription-bridge-gemini-pro") == ["low", "medium", "high"]
+    assert reasoning_levels_for_model("subscription-bridge-fake") == []
 
 
 @pytest.mark.asyncio
