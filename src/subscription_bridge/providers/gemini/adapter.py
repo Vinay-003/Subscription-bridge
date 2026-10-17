@@ -39,6 +39,7 @@ from subscription_bridge.providers.gemini.response_reader import (
 )
 from subscription_bridge.providers.gemini.selectors import get_selector
 from subscription_bridge.providers.gemini.upload import UploadError, upload_files
+from subscription_bridge.providers.timeouts import response_wait_seconds, send_confirm_seconds
 
 
 class GeminiError(Exception):
@@ -195,11 +196,16 @@ class GeminiProviderAdapter(ProviderAdapter):
             await submit_via_enter(session.page)
             logger.info("send_method_used", method="enter", run_id=request.run_id)
 
-            accepted = await wait_for_send_confirmation(session.page, timeout=15.0, pre_send_count=pre_send_count)
+            confirm_wait = send_confirm_seconds("gemini")
+            accepted = await wait_for_send_confirmation(
+                session.page, timeout=round(confirm_wait * 0.6, 1), pre_send_count=pre_send_count
+            )
             if not accepted:
                 logger.info("send_method_fallback", method="send_button_click", run_id=request.run_id)
                 await _click_send_button(session.page)
-                accepted = await wait_for_send_confirmation(session.page, timeout=20.0, pre_send_count=pre_send_count)
+                accepted = await wait_for_send_confirmation(
+                    session.page, timeout=confirm_wait, pre_send_count=pre_send_count
+                )
 
             if not accepted:
                 await session.screenshot_debug("send_not_confirmed")
@@ -210,7 +216,16 @@ class GeminiProviderAdapter(ProviderAdapter):
                     metadata=upload_meta or {},
                 )
 
-            complete = await wait_for_response_complete(session.page, timeout=120.0, pre_send_count=pre_send_count)
+            response_wait = response_wait_seconds("gemini", request.timeout_seconds)
+            logger.info(
+                "response_wait_budget",
+                seconds=response_wait,
+                requested=request.timeout_seconds,
+                run_id=request.run_id,
+            )
+            complete = await wait_for_response_complete(
+                session.page, timeout=response_wait, pre_send_count=pre_send_count
+            )
             if not complete:
                 await session.screenshot_debug("response_timeout")
                 text = await extract_latest_assistant_text(session.page)

@@ -138,6 +138,24 @@ Centralized CSS selectors for the Gemini web UI. Organized by interaction type:
 - `buttons` — Send, new chat buttons
 - `unsafe_click_words` — Labels to never click (delete, settings, etc.)
 
+### Response wait budgets
+
+`src/subscription_bridge/providers/timeouts.py` resolves how long a provider waits
+for the browser to finish answering:
+
+| Bound | Source | Value |
+|-------|--------|-------|
+| Floor | `timeouts.generation` in the provider's selector YAML | `300000` ms (300 s) |
+| Client budget | OpenAI gateway: `max_completion_tokens // 100` seconds | may raise the wait above the floor |
+| Hard cap | code constant | 900 s, so a runaway generation cannot pin a tab |
+
+`timeouts.send_confirm` (`35000` ms) is the full send-confirmation wait. The first
+attempt uses 60% of it and falls back to the full value if the send did not
+register.
+
+While a request is still generating, the SSE stream emits `: keepalive` comments
+every 10 s so an idle socket does not cause the client to abort a long turn.
+
 ---
 
 ## `configs/tool_permissions.yaml`

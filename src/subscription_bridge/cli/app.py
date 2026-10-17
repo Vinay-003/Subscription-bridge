@@ -574,6 +574,11 @@ def start_server(
     _os.environ["BRIDGE_INIT_PROVIDERS"] = chosen
 
     console.print(f"[dim]Provider(s):[/dim] [cyan]{chosen}[/cyan]")
+    from subscription_bridge.providers.timeouts import response_wait_seconds
+
+    provider_names = ("gemini", "chatgpt") if chosen == "both" else (chosen,)
+    waits = ", ".join(f"{name} {response_wait_seconds(name):.0f}s" for name in provider_names)
+    console.print(f"[dim]Response wait budget:[/dim] [cyan]{waits}[/cyan] (up to 900s for large max_tokens)")
     console.print()
     console.print(f"[dim]API server starting on[/dim] [cyan]{host}:{port}[/cyan]")
     console.print(f"[dim]Docs:[/dim] [cyan]http://{host}:{port}/docs[/cyan]")
@@ -799,6 +804,11 @@ def browser_doctor() -> None:
     # Check download timeout
     dl_timeout = int(browser_config.get("download_timeout_seconds", 180))
     console.print(f"  [bold]Download timeout:[/bold] {dl_timeout}s")
+
+    from subscription_bridge.providers.timeouts import response_wait_seconds
+
+    waits = ", ".join(f"{pname} {response_wait_seconds(pname):.0f}s" for pname in providers_to_check)
+    console.print(f"  [bold]Response wait:[/bold] {waits}")
 
     if ok:
         console.print("\n[green bold]✓[/green bold] Browser environment looks good")

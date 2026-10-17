@@ -14,6 +14,7 @@ from subscription_bridge.providers.base import (
     ProviderRequest,
     ProviderResponse,
 )
+from subscription_bridge.providers.timeouts import response_wait_seconds, send_confirm_seconds
 
 logger = get_logger("provider.chatgpt")
 
@@ -118,13 +119,14 @@ class ChatGPTProviderAdapter(ProviderAdapter):
             await _submit_via_enter(session.page)
             logger.info("send_method_used", method="enter", run_id=request.run_id)
 
+            confirm_wait = send_confirm_seconds("chatgpt")
             accepted = await _wait_for_send_confirmation(
-                session.page, pre_send_count=pre_send_count, timeout=20.0,
+                session.page, pre_send_count=pre_send_count, timeout=round(confirm_wait * 0.6, 1),
             )
             if not accepted:
                 await _click_send_button(session.page)
                 accepted = await _wait_for_send_confirmation(
-                    session.page, pre_send_count=pre_send_count, timeout=25.0,
+                    session.page, pre_send_count=pre_send_count, timeout=confirm_wait,
                 )
 
             if not accepted:
@@ -136,8 +138,15 @@ class ChatGPTProviderAdapter(ProviderAdapter):
                     metadata=upload_meta or {},
                 )
 
+            response_wait = response_wait_seconds("chatgpt", request.timeout_seconds)
+            logger.info(
+                "response_wait_budget",
+                seconds=response_wait,
+                requested=request.timeout_seconds,
+                run_id=request.run_id,
+            )
             complete = await _wait_for_response_complete(
-                session.page, pre_send_count=pre_send_count, timeout=180.0,
+                session.page, pre_send_count=pre_send_count, timeout=response_wait,
             )
             if not complete:
                 await session.screenshot_debug("response_timeout")
