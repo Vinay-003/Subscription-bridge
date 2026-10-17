@@ -38,24 +38,39 @@ Add the following to your OpenCode configuration (e.g., `~/.config/opencode/open
 
         "subscription-bridge-gemini-flash-lite": {
           "name": "Gemini 3.5 Flash-Lite",
-          "limit": { "context": 1048576, "output": 16384 },
+          "limit": { "context": 1048576, "output": 65536 },
           "modalities": { "input": ["text", "image"], "output": ["text"] },
           "tool_call": true,
-          "reasoning": true
+          "reasoning": true,
+          "variants": {
+            "low":    { "reasoningEffort": "low" },
+            "medium": { "reasoningEffort": "medium" },
+            "high":   { "reasoningEffort": "high" }
+          }
         },
         "subscription-bridge-gemini-flash": {
           "name": "Gemini 3.8 Flash",
           "limit": { "context": 1048576, "output": 65536 },
           "modalities": { "input": ["text", "image"], "output": ["text"] },
           "tool_call": true,
-          "reasoning": true
+          "reasoning": true,
+          "variants": {
+            "low":    { "reasoningEffort": "low" },
+            "medium": { "reasoningEffort": "medium" },
+            "high":   { "reasoningEffort": "high" }
+          }
         },
         "subscription-bridge-gemini-pro": {
           "name": "Gemini 3.1 Pro",
-          "limit": { "context": 1000000, "output": 65536 },
+          "limit": { "context": 1048576, "output": 65536 },
           "modalities": { "input": ["text", "image"], "output": ["text"] },
           "tool_call": true,
-          "reasoning": true
+          "reasoning": true,
+          "variants": {
+            "low":    { "reasoningEffort": "low" },
+            "medium": { "reasoningEffort": "medium" },
+            "high":   { "reasoningEffort": "high" }
+          }
         },
         "subscription-bridge-gemini-argon": {
           "name": "Gemini 4 Argon",
@@ -72,14 +87,14 @@ Add the following to your OpenCode configuration (e.g., `~/.config/opencode/open
 
         "subscription-bridge-chatgpt": {
           "name": "ChatGPT Instant",
-          "limit": { "context": 128000, "output": 16384 },
+          "limit": { "context": 128000, "output": 8192 },
           "modalities": { "input": ["text", "image"], "output": ["text"] },
           "tool_call": true
         },
 
         "subscription-bridge-chatgpt-thinking": {
           "name": "ChatGPT Thinking",
-          "limit": { "context": 131072, "output": 131072 },
+          "limit": { "context": 128000, "output": 8192 },
           "modalities": { "input": ["text", "image"], "output": ["text"] },
           "tool_call": true
         }
@@ -230,13 +245,13 @@ bridge server
 | Model ID | Backend | Context | Output | Browser Required |
 |----------|---------|---------|--------|-----------------|
 | `subscription-bridge-fake` | FakeProviderAdapter | 32K | 8K | No |
-| `subscription-bridge-gemini-flash-lite` | Gemini 3.5 Flash-Lite | 1M | 16K | Yes |
+| `subscription-bridge-gemini-flash-lite` | Gemini 3.5 Flash-Lite | 1M | 64K | Yes |
 | `subscription-bridge-gemini-flash` | Gemini 3.8 Flash | 1M | 64K | Yes |
 | `subscription-bridge-gemini-pro` | Gemini 3.1 Pro | 1M | 64K | Yes |
 | `subscription-bridge-gemini-argon` | Gemini 4 Argon | 1M | 64K | Yes |
-| `subscription-bridge-chatgpt` | ChatGPT Instant | 128K | 16K | Yes |
-| `subscription-bridge-chatgpt-thinking` | ChatGPT Thinking | 128K in + 128K out | 128K | Yes |
-| `subscription-bridge-chatgpt-pro` | ChatGPT Pro | 128K | 16K | Yes |
+| `subscription-bridge-chatgpt` | ChatGPT Instant | 128K | 8K | Yes |
+| `subscription-bridge-chatgpt-thinking` | ChatGPT Thinking | 128K | 8K | Yes |
+| `subscription-bridge-chatgpt-pro` | ChatGPT Pro | 128K | 8K | Yes |
 
 Legacy ids (`subscription-bridge-gemini-fast`, `subscription-bridge-gemini-thinking`)
 are still accepted as aliases and resolve to `gemini-flash` and `gemini-pro`.

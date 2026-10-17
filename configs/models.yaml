@@ -13,7 +13,7 @@ models:
     provider_variant: 3.5 Flash-Lite
     label: Gemini 3.5 Flash-Lite (Browser)
     context_limit: 1048576
-    output_limit: 16384
+    output_limit: 65536
     reasoning: true
     reasoning_efforts: [low, medium, high]
     capabilities:
@@ -36,7 +36,7 @@ models:
     provider: gemini
     provider_variant: 3.1 Pro
     label: Gemini 3.1 Pro (Browser)
-    context_limit: 1000000
+    context_limit: 1048576
     output_limit: 65536
     reasoning: true
     reasoning_efforts: [low, medium, high]
@@ -61,7 +61,7 @@ models:
     provider_variant: Instant
     label: ChatGPT Browser
     context_limit: 128000
-    output_limit: 16384
+    output_limit: 8192
     capabilities:
       input: [text, image]
       output: [text]
@@ -70,8 +70,8 @@ models:
     provider: chatgpt
     provider_variant: Thinking
     label: ChatGPT Browser Thinking
-    context_limit: 131072
-    output_limit: 131072
+    context_limit: 128000
+    output_limit: 8192
     capabilities:
       input: [text, image]
       output: [text]
@@ -81,7 +81,7 @@ models:
     provider_variant: Pro
     label: ChatGPT Browser Pro
     context_limit: 128000
-    output_limit: 16384
+    output_limit: 8192
     capabilities:
       input: [text, image]
       output: [text]
