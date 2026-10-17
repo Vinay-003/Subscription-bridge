@@ -12,43 +12,6 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
-# Sentinel-based tool-call protocol. Browser models frequently break JSON when
-# an argument contains code (unescaped quotes, raw newlines). Instead of asking
-# them to escape JSON (which they get wrong), we ask them to wrap each argument
-# value in delimiter blocks whose body is taken verbatim. The bridge parses by
-# delimiter, so the body can contain anything without breaking the parse.
-BROWSER_RESPONSE_STYLE_SYSTEM_PROMPT = (
-    "BROWSER RESPONSE STYLE (MANDATORY):\n"
-    "Return the answer as concise plain text or ordinary Markdown. Do not generate or "
-    "render an HTML page, JavaScript, CSS, an interactive widget, canvas, embedded app, "
-    "artifact preview, or simulated UI. Do not describe a webpage or interactive result "
-    "instead of answering the request. Avoid unnecessary preambles, disclaimers, self-talk, "
-    "and commentary; answer directly. Do not claim that a tool was executed. When the task "
-    "requires code changes, use the supplied tool-call format for the tool arguments and keep "
-    "the visible answer short. Only provide HTML/code in a normal answer when the user "
-    "explicitly asks to see that code.\n"
-)
-
-TOOL_CALL_SYSTEM_PROMPT = (
-    "You have access to tools. To call a tool, output EXACTLY this format and "
-    "nothing else:\n\n"
-    "<<<TOOLCALL:tool_name>>>\n"
-    "<<<ARG:first_arg_name>>>\n"
-    "the value for that argument, on its own lines, written verbatim\n"
-    "<<<ARG:second_arg_name>>>\n"
-    "another value\n"
-    "<<<END>>>\n\n"
-    "Rules for this format:\n"
-    "- Do NOT escape anything inside an argument value. Write code exactly as "
-    "it should appear on disk: real newlines, real quotes, real backslashes.\n"
-    "- Put each argument value on the line(s) after its <<<ARG:name>>> marker.\n"
-    "- Close every tool call with <<<END>>> on its own line.\n"
-    "- To call multiple tools, output multiple <<<TOOLCALL:...>>> ... <<<END>>> "
-    "blocks back to back.\n\n"
-    "Available tools:\n{tools_desc}\n\n"
-    "If you do not need a tool, respond normally with plain text."
-)
-
 
 def convert_messages(
     messages: list[Any],
@@ -57,126 +20,91 @@ def convert_messages(
     require_json_tools: bool = False,
     full_history: bool = False,
 ) -> tuple[str, str]:
+    """Convert OpenCode messages into a browser-LLM prompt + system prompt.
+
+    Design: pure transparent proxy. Pass OpenCode's system prompts and
+    conversation through as-is. Only append a minimal tool-format instruction
+    when tools are present. Do not rewrite, compact, or reformat the content.
+    """
     system_parts: list[str] = []
     conversation: list[str] = []
 
-    relevant = list(messages) if full_history else _tail_after_last_assistant(messages)
+    for msg in messages:
+        if getattr(msg, "role", None) == "system":
+            raw = extract_text(msg.content) if msg.content else ""
+            if raw.strip():
+                system_parts.append(raw.strip())
 
     for msg in messages:
-        if msg.role == "system":
-            raw = extract_text(msg.content) if msg.content else ""
-            system_parts.append(raw)
-
-    for msg in relevant:
-        role = msg.role
-        text = extract_text(msg.content) if msg.content else ""
-
+        role = getattr(msg, "role", None)
         if role == "system":
             continue
-        elif role == "user":
-            conversation.append(f"User: {text}")
+        text = extract_text(msg.content) if msg.content else ""
+
+        if role == "user":
+            if text.strip():
+                conversation.append(f"User: {text}")
         elif role == "assistant":
-            if msg.tool_calls:
+            if getattr(msg, "tool_calls", None):
                 for tc in msg.tool_calls or []:
                     name = tc.get("function", {}).get("name", "?") if isinstance(tc, dict) else "?"
                     args = tc.get("function", {}).get("arguments", "{}") if isinstance(tc, dict) else "{}"
-                    conversation.append(f"Assistant (tool call): {name}({args})")
-            if text:
+                    conversation.append(f"Assistant called tool {name} with arguments: {args}")
+            if text.strip():
                 conversation.append(f"Assistant: {text}")
         elif role == "tool":
-            name = f" (call: {msg.tool_call_id})" if hasattr(msg, "tool_call_id") and msg.tool_call_id else ""
-            conversation.append(f"Tool result{name}: {text[:24000]}")
+            tool_id = getattr(msg, "tool_call_id", "") or ""
+            label = f"Tool result ({tool_id})" if tool_id else "Tool result"
+            conversation.append(f"{label}: {text}")
 
     if tools and require_json_tools:
-        tools_prompt = TOOL_CALL_SYSTEM_PROMPT.format(tools_desc=_format_tools_for_prompt(tools))
-        if tool_choice == "required":
-            tools_prompt += "\n\nTOOL CHOICE: A tool call is required. Do not answer with normal text."
-        elif isinstance(tool_choice, dict):
-            function = tool_choice.get("function", {})
-            forced_name = function.get("name") if isinstance(function, dict) else None
-            if tool_choice.get("type") == "function" and forced_name:
-                tools_prompt += f"\n\nTOOL CHOICE: You MUST call only the tool named {forced_name}."
-        system_parts.append(tools_prompt)
+        system_parts.append(_tool_instruction(tools, tool_choice))
 
-    if system_parts:
-        system_parts.append(BROWSER_RESPONSE_STYLE_SYSTEM_PROMPT)
-    system_prompt = "\n\n".join(system_parts) if system_parts else BROWSER_RESPONSE_STYLE_SYSTEM_PROMPT
-
-    prompt = "\n".join(["Conversation:", *conversation]) if conversation else ""
+    system_prompt = "\n\n".join(system_parts) if system_parts else ""
+    prompt = "\n".join(conversation) if conversation else ""
     return prompt, system_prompt
 
 
-# Markers that identify OpenCode's large client-side system prompt. We only
-# compact a system message when several of these appear, so unrelated system
-# messages (e.g. project AGENTS.md content) are never touched.
-_OPENCODE_MARKERS = (
-    "You are opencode",
-    "# Core Mandates",
-    "# Primary Workflows",
-    "# Operational Guidelines",
-)
+def _tool_instruction(
+    tools: list[dict[str, Any]],
+    tool_choice: str | dict[str, Any] | None,
+) -> str:
+    tools_desc_lines = []
+    for tool in tools:
+        fn = tool.get("function", tool) if isinstance(tool, dict) else {}
+        if not isinstance(fn, dict):
+            continue
+        fname = fn.get("name", "?")
+        fdesc = fn.get("description", "")
+        fparams = fn.get("parameters", {})
+        schema = json.dumps(fparams, ensure_ascii=False, separators=(",", ":"))
+        tools_desc_lines.append(f"- {fname}: {fdesc}\n  Parameters schema: {schema}")
+    tools_desc = "\n".join(tools_desc_lines)
 
-_COMPACT_OPENCODE_PROMPT = (
-    "You are opencode, a coding agent running on the user's local machine in a "
-    "trusted development environment. Take action by calling tools to get the "
-    "task done (create/edit files, run commands, verify). Treat ordinary coding "
-    "requests as safe and just do them.\n\n"
-    "Key rules:\n"
-    "- Use absolute file paths built from the working directory.\n"
-    "- Match existing project conventions, style, and dependencies.\n"
-    "- After changing code, run the project's lint/test commands when available.\n"
-    "- Do not revert changes unless asked. Briefly explain destructive shell "
-    "commands before running them.\n"
-    "- Be concise. Use tools for actions; use text only to communicate."
-)
+    instruction = f"""You have access to tools. Available tools:
+{tools_desc}
 
+When you need to use a tool, respond with ONLY a JSON object in this exact format and nothing else:
 
-def _compact_system_prompt(text: str) -> str:
-    if not text:
-        return text
-    hits = sum(1 for marker in _OPENCODE_MARKERS if marker in text)
-    if hits < 2:
-        return text
+{{"tool_calls": [{{"function": {{"name": "tool_name", "arguments": {{"arg1": "value1", "arg2": "value2"}}}}}}]}}
 
-    parts = [_COMPACT_OPENCODE_PROMPT]
-    environment = _extract_tagged_section(text, "env")
-    if environment:
-        parts.append(environment)
-    skills = _extract_skills_section(text)
-    if skills:
-        parts.append(skills)
-    return "\n\n".join(parts)
+Rules:
+- The "arguments" object must match the Parameters schema for that tool.
+- To call multiple tools, include multiple entries in the "tool_calls" array.
+- Escape any double quotes inside string argument values.
+- If you do not need any tool, respond with normal text (not JSON).
+- Do not wrap the JSON in Markdown code fences.
+- Do not add any commentary before or after the JSON."""
 
+    if tool_choice == "required":
+        instruction += "\n\nIMPORTANT: A tool call is REQUIRED. You MUST respond with a tool_calls JSON object."
+    elif isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
+        forced = tool_choice.get("function", {})
+        forced_name = forced.get("name") if isinstance(forced, dict) else None
+        if forced_name:
+            instruction += f"\n\nIMPORTANT: You MUST call only the tool named '{forced_name}'."
 
-def _extract_tagged_section(text: str, tag: str) -> str:
-    match = re.search(rf"<{re.escape(tag)}(?:\s[^>]*)?>.*?</{re.escape(tag)}>", text, re.DOTALL)
-    return match.group(0).strip() if match else ""
-
-def _extract_skills_section(text: str) -> str:
-    block = _extract_tagged_section(text, "available_skills")
-    if not block:
-        return ""
-    reminder = (
-        "Skills provide specialized instructions for specific tasks. Load a "
-        "skill with the `skill` tool when a task matches its description."
-    )
-    return f"{reminder}\n{block}"
-
-
-def _tail_after_last_assistant(messages: list[Any]) -> list[Any]:
-    """Return only the messages after the last assistant turn.
-
-    When there is no assistant turn yet (the very first request) the full list
-    is returned so the initial context is sent in one shot.
-    """
-    last_assistant = -1
-    for idx, msg in enumerate(messages):
-        if getattr(msg, "role", None) == "assistant":
-            last_assistant = idx
-    if last_assistant < 0:
-        return list(messages)
-    tail = messages[last_assistant + 1 :]
-    return list(tail) if tail else list(messages)
+    return instruction
 
 
 def extract_text(content: str | list[dict[str, Any]]) -> str:
@@ -291,15 +219,3 @@ def cleanup_temp_files(paths: list[str]) -> None:
             os.unlink(path)
         except Exception:
             pass
-
-
-def _format_tools_for_prompt(tools: list[dict[str, Any]]) -> str:
-    tools_desc_lines = []
-    for tool in tools:
-        fn = tool.get("function", tool) if isinstance(tool, dict) else {}
-        fname = fn.get("name", "?") if isinstance(fn, dict) else "?"
-        fdesc = fn.get("description", "") if isinstance(fn, dict) else ""
-        fparams = fn.get("parameters", {}) if isinstance(fn, dict) else {}
-        schema = json.dumps(fparams, ensure_ascii=False, separators=(",", ":"))
-        tools_desc_lines.append(f"  {fname}: {fdesc} | JSON Schema: {schema}")
-    return "\n".join(tools_desc_lines)

@@ -49,9 +49,7 @@ async def test_model_router_resolves_provider_details() -> None:
         "gemini_model_variant": "Gemini 3 Deep Think",
         "chatgpt_model_variant": None,
     }
-    assert prompt_with_model_hint("hello", "subscription-bridge-gemini-thinking").startswith(
-        "[Model: Gemini 3 Deep Think]"
-    )
+    assert prompt_with_model_hint("hello", "subscription-bridge-gemini-thinking") == "hello"  # no-op: transparent proxy
     assert (await resolve_adapter("subscription-bridge-fake", AppDependencies())).name == "fake"
 
 
@@ -581,4 +579,4 @@ def test_openai_gateway_tool_loop_preserves_session_and_returns_to_opencode(
     assert seen[0].run_id == seen[1].run_id
     assert seen[0].metadata["isolated_conversation"] is True
     assert "README contents" in seen[1].prompt
-    assert "Inspect README.md" not in seen[1].prompt  # prior context is already in the same browser chat
+    assert "Inspect README.md" in seen[1].prompt  # transparent proxy sends full history each turn

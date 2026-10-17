@@ -27,7 +27,6 @@ from subscription_bridge.api.openai.model_catalog import (
     strip_provider_prefix,
 )
 from subscription_bridge.api.openai.model_router import (
-    prompt_with_model_hint,
     provider_metadata,
     resolve_adapter,
 )
@@ -117,11 +116,6 @@ def _chatgpt_model_variant(model_id: str) -> str:
     return chatgpt_model_variant(model_id)
 
 
-def _with_model_hint(prompt: str, variant: str) -> str:
-    header = f"[Model: {variant}]"
-    if not prompt:
-        return header
-    return f"{header}\n{prompt}"
 
 
 def _resolve_agent_answer(result: Any) -> str:
@@ -283,32 +277,15 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
         tool_choice=req.tool_choice,
         require_json_tools=has_tools,
     )
-    full_history_prompt, _ = _convert_messages(
-        req.messages, req.tools if has_tools else None,
-        tool_choice=req.tool_choice,
-        require_json_tools=has_tools,
-        full_history=True,
-    )
-
-    if isinstance(req.response_format, dict) and req.response_format.get("type") == "json_object":
-        system_prompt = (system_prompt or "") + (
-            "\n\nOUTPUT FORMAT: Return only a valid JSON object. Do not wrap it in Markdown fences or add commentary."
-        )
 
     workspace_resolution = resolve_workspace(req, request)
     log.info("workspace_resolved", workspace=workspace_resolution.path, source=workspace_resolution.source)
-
-    prompt = prompt_with_model_hint(prompt, req.model)
 
     attachments: list[str] = []
     for msg in req.messages:
         if isinstance(msg.content, list):
             attachments.extend(_extract_images_from_content(msg.content))
 
-    # Always derive a stable conversation id from the leading messages so the
-    # same browser chat (and its history) is reused across turns. Using a fresh
-    # uuid per tool turn forced a brand-new chat every time, which re-sent the
-    # full system prompt and dropped all prior context.
     provider_req = ProviderRequest(
         run_id=_conversation_id(req.messages, request),
         prompt=prompt,
@@ -316,7 +293,7 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
         attachments=attachments or None,
         require_json=has_tools,
         timeout_seconds=max((req.max_completion_tokens or req.max_tokens or 1024) // 100, 30),
-        metadata={**provider_metadata(req.model), "isolated_conversation": True, "full_prompt": full_history_prompt},
+        metadata={**provider_metadata(req.model), "isolated_conversation": True},
     )
 
     if req.stream:

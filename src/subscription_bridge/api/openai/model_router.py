@@ -60,13 +60,7 @@ async def resolve_adapter(model_id: str, deps: AppDependencies) -> Any | None:
 
 
 def prompt_with_model_hint(prompt: str, model_id: str) -> str:
-    route = route_for_model(model_id)
-    if route is None or route.variant is None:
-        return prompt
-    header = f"[Model: {route.variant}]"
-    if not prompt:
-        return header
-    return f"{header}\n{prompt}"
+    return prompt
 
 
 def provider_metadata(model_id: str) -> dict[str, str | None]:

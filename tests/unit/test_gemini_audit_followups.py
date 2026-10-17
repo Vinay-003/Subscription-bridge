@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 
-from subscription_bridge.api.openai.message_converter import _compact_system_prompt
 from subscription_bridge.api.openai.tool_parser import parse_tool_calls
 from subscription_bridge.browser.ui_guard import default_unsafe_words
 
@@ -53,15 +52,18 @@ def test_new_chat_is_not_globally_blocked_by_ui_guard():
     assert "new chat" not in default_unsafe_words()
 
 
-def test_compacted_opencode_prompt_preserves_env_and_skills():
-    prompt = (
-        "You are opencode\n# Core Mandates\n# Primary Workflows\n# Operational Guidelines\n"
-        "<env><cwd>/tmp/project</cwd></env>\n"
-        "<available_skills><skill>test</skill></available_skills>"
-    )
-    compacted = _compact_system_prompt(prompt)
-    assert "<env>" in compacted and "</env>" in compacted
-    assert "<available_skills>" in compacted
+def test_opencode_system_prompt_passes_through_unmodified():
+    from types import SimpleNamespace
+
+    from subscription_bridge.api.openai.message_converter import convert_messages
+
+    full_system = "You are opencode\n# Core Mandates\n<env><cwd>/tmp/project</cwd></env>"
+    messages = [
+        SimpleNamespace(role="system", content=full_system),
+        SimpleNamespace(role="user", content="hi", tool_calls=None, tool_call_id=None),
+    ]
+    _, system_prompt = convert_messages(messages)
+    assert system_prompt == full_system
 
 
 def test_tool_results_are_not_truncated_at_one_thousand_characters():
