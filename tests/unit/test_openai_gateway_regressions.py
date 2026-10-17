@@ -150,6 +150,15 @@ def test_strip_provider_prefix_handles_opencode_slash_form() -> None:
     assert strip_provider_prefix("gemini-flash") == "gemini-flash"
 
 
+def test_resolve_model_alias_strips_opencode_provider_prefix() -> None:
+    from subscription_bridge.api.openai.model_catalog import resolve_model_alias
+
+    assert resolve_model_alias("subscription-bridge/gemini-flash") == "subscription-bridge-gemini-flash"
+    assert resolve_model_alias("subscription-bridge/chatgpt") == "subscription-bridge-chatgpt"
+    assert resolve_model_alias("subscription-bridge/gemini-thinking") == "subscription-bridge-gemini-pro"
+    assert resolve_model_alias("subscription-bridge/gemini-2.5-pro") == "subscription-bridge-gemini-pro"
+
+
 def test_converter_includes_full_conversation_history() -> None:
     messages = [
         OpenAIMessage(role="system", content="system instructions"),

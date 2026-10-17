@@ -30,6 +30,17 @@ DEFAULT_MODEL_ALIASES: dict[str, str] = {
     "subscription-bridge-gemini-3-pro": MODEL_GEMINI_PRO,
     "gemini-2.0-flash": MODEL_GEMINI_FLASH_LITE,
     "gemini-2.5-pro": MODEL_GEMINI_PRO,
+    # Bare names, as sent by clients that drop the provider prefix after
+    # stripping ``subscription-bridge/`` from the catalog id.
+    "gemini-flash-lite": MODEL_GEMINI_FLASH_LITE,
+    "gemini-flash": MODEL_GEMINI_FLASH,
+    "gemini-pro": MODEL_GEMINI_PRO,
+    "gemini-argon": MODEL_GEMINI_ARGON,
+    "gemini-thinking": MODEL_GEMINI_PRO,
+    "gemini-fast": MODEL_GEMINI_FLASH,
+    "chatgpt": MODEL_CHATGPT,
+    "chatgpt-thinking": MODEL_CHATGPT_THINKING,
+    "chatgpt-pro": MODEL_CHATGPT_PRO,
 }
 
 DEFAULT_GEMINI_MODELS = {
@@ -155,11 +166,17 @@ def strip_provider_prefix(model_id: str) -> str:
 
 
 def resolve_model_alias(model_id: str) -> str:
+    """Resolve a client-supplied model id to a catalog id.
+
+    Clients such as OpenCode prefix the catalog id with the provider name, so
+    ``subscription-bridge/gemini-flash`` must resolve to the bare
+    ``gemini-flash``. Alias entries win over the bare id so short names keep
+    working. When no alias matches, the stripped id is returned so prefixed ids
+    resolve and bare ids pass through untouched.
+    """
     stripped = strip_provider_prefix(model_id)
     aliases = _configured_aliases() or DEFAULT_MODEL_ALIASES
-    if stripped in aliases:
-        return aliases[stripped]
-    return model_id
+    return aliases.get(stripped, stripped)
 
 
 def is_gemini_model(model_id: str) -> bool:

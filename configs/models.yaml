@@ -94,3 +94,14 @@ aliases:
   subscription-bridge-gemini-3-pro: subscription-bridge-gemini-pro
   gemini-2.0-flash: subscription-bridge-gemini-flash-lite
   gemini-2.5-pro: subscription-bridge-gemini-pro
+  # Bare names, as sent by clients that drop the provider prefix after
+  # stripping ``subscription-bridge/`` from the catalog id.
+  gemini-flash-lite: subscription-bridge-gemini-flash-lite
+  gemini-flash: subscription-bridge-gemini-flash
+  gemini-pro: subscription-bridge-gemini-pro
+  gemini-argon: subscription-bridge-gemini-argon
+  gemini-thinking: subscription-bridge-gemini-pro
+  gemini-fast: subscription-bridge-gemini-flash
+  chatgpt: subscription-bridge-chatgpt
+  chatgpt-thinking: subscription-bridge-chatgpt-thinking
+  chatgpt-pro: subscription-bridge-chatgpt-pro
