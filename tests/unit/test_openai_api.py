@@ -45,7 +45,6 @@ def test_model_context_and_output_limits_match_published_specs() -> None:
     gemini_full = (
         "subscription-bridge-gemini-flash-lite",
         "subscription-bridge-gemini-flash",
-        "subscription-bridge-gemini-argon",
     )
     for gemini_id in gemini_full:
         assert context_limit_for_model(gemini_id) == 1048576
@@ -53,6 +52,11 @@ def test_model_context_and_output_limits_match_published_specs() -> None:
 
     assert context_limit_for_model("subscription-bridge-gemini-pro") == 1000000
     assert output_limit_for_model("subscription-bridge-gemini-pro") == 65536
+
+    # Argon shares one 1,048,576 window across input/thinking/output, so the
+    # usable input budget is the total minus the reserved output headroom.
+    assert context_limit_for_model("subscription-bridge-gemini-argon") == 1048576 - 65536
+    assert output_limit_for_model("subscription-bridge-gemini-argon") == 65536
 
     for chatgpt_id in (
         "subscription-bridge-chatgpt",

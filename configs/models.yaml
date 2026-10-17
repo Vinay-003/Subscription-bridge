@@ -48,7 +48,7 @@ models:
     provider: gemini
     provider_variant: 4 Argon
     label: Gemini 4 Argon (Browser)
-    context_limit: 1048576
+    context_limit: 983040
     output_limit: 65536
     reasoning: true
     reasoning_efforts: [low, medium, high]

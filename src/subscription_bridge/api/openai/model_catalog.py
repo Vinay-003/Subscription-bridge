@@ -47,7 +47,10 @@ DEFAULT_MODEL_CONTEXT_LIMITS: dict[str, int] = {
     MODEL_GEMINI_FLASH_LITE: 1_048_576,
     MODEL_GEMINI_FLASH: 1_048_576,
     MODEL_GEMINI_PRO: 1_000_000,
-    MODEL_GEMINI_ARGON: 1_048_576,
+    # Argon uses a unified 1,048,576 window shared by input, thinking, and output.
+    # Advertise the usable input budget (total minus the 65,536 output reserve) so
+    # clients compact before thinking+output would overflow the shared window.
+    MODEL_GEMINI_ARGON: 983_040,
     MODEL_CHATGPT: 128_000,
     MODEL_CHATGPT_THINKING: 128_000,
     MODEL_CHATGPT_PRO: 128_000,

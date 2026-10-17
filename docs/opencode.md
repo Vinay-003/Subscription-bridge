@@ -74,7 +74,7 @@ Add the following to your OpenCode configuration (e.g., `~/.config/opencode/open
         },
         "subscription-bridge-gemini-argon": {
           "name": "Gemini 4 Argon",
-          "limit": { "context": 1048576, "output": 65536 },
+          "limit": { "context": 983040, "output": 65536 },
           "modalities": { "input": ["text", "image"], "output": ["text"] },
           "tool_call": true,
           "reasoning": true,
@@ -248,7 +248,7 @@ bridge server
 | `subscription-bridge-gemini-flash-lite` | Gemini 3.5 Flash-Lite | 1M | 64K | Yes |
 | `subscription-bridge-gemini-flash` | Gemini 3.8 Flash | 1M | 64K | Yes |
 | `subscription-bridge-gemini-pro` | Gemini 3.1 Pro | 1M | 64K | Yes |
-| `subscription-bridge-gemini-argon` | Gemini 4 Argon | 1M | 64K | Yes |
+| `subscription-bridge-gemini-argon` | Gemini 4 Argon | 960K | 64K | Yes |
 | `subscription-bridge-chatgpt` | ChatGPT Instant | 128K | 8K | Yes |
 | `subscription-bridge-chatgpt-thinking` | ChatGPT Thinking | 128K | 8K | Yes |
 | `subscription-bridge-chatgpt-pro` | ChatGPT Pro | 128K | 8K | Yes |
