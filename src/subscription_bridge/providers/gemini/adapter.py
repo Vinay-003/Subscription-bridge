@@ -46,6 +46,22 @@ class GeminiError(Exception):
     ...
 
 
+_UI_ERROR_MARKERS = (
+    "sorry, something went wrong",
+    "please try your request again",
+    "please try again later",
+    "couldn't load response",
+)
+
+
+def _is_ui_error_text(text: str) -> bool:
+    """Detect Gemini's own failure banners so they are never shipped as answers."""
+    normalized = " ".join(text.lower().split())
+    if len(normalized) > 600:
+        return False
+    return any(marker in normalized for marker in _UI_ERROR_MARKERS)
+
+
 class GeminiProviderAdapter(ProviderAdapter):
     name = "gemini"
     capabilities: set[ProviderCapability] = {"text_chat", "code_reasoning", "file_upload", "vision"}
@@ -229,6 +245,15 @@ class GeminiProviderAdapter(ProviderAdapter):
             if not complete:
                 await session.screenshot_debug("response_timeout")
                 text = await extract_latest_assistant_text(session.page)
+                if text and _is_ui_error_text(text):
+                    await session.screenshot_debug("error_response")
+                    session.has_active_conversation = True
+                    return ProviderResponse(
+                        provider=self.name, text="", raw_text=text, success=False,
+                        latency_seconds=time.monotonic() - start,
+                        error=f"Gemini returned an error response: {text[:300]}",
+                        metadata=upload_meta or {},
+                    )
                 if text:
                     return ProviderResponse(
                         provider=self.name, text=text, raw_text=text, success=True,
@@ -249,6 +274,15 @@ class GeminiProviderAdapter(ProviderAdapter):
                     provider=self.name, text="", raw_text="", success=False,
                     latency_seconds=time.monotonic() - start,
                     error="Gemini returned empty response",
+                    metadata=upload_meta or {},
+                )
+            if _is_ui_error_text(text):
+                await session.screenshot_debug("error_response")
+                session.has_active_conversation = True
+                return ProviderResponse(
+                    provider=self.name, text="", raw_text=text, success=False,
+                    latency_seconds=time.monotonic() - start,
+                    error=f"Gemini returned an error response: {text[:300]}",
                     metadata=upload_meta or {},
                 )
 

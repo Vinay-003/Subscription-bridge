@@ -437,3 +437,24 @@ async def test_wait_for_ui_ready_stops_on_persistent_needs_login(
 
 def test_clean_assistant_text_filters_stopped_message() -> None:
     assert _clean_assistant_text("You stopped this response") == ""
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("PONG", False),
+        ("KILO-77", False),
+        ("Sorry, something went wrong. Please try your request again.", True),
+        (
+            "Gemini said\n\nSorry, something went wrong. "
+            "Please try your request again. Want faster responses next time? "
+            "Switch to the all-new 3.8 Flash for the latest in speed.",
+            True,
+        ),
+        ("The build failed; an error occurred in step 3 of the pipeline.", False),
+        ("The request failed because something went wrong with the cache.", False),
+        ("x" * 700 + " something went wrong", False),
+    ],
+)
+def test_is_ui_error_text(text: str, expected: bool) -> None:
+    assert gemini_adapter._is_ui_error_text(text) is expected
