@@ -257,11 +257,21 @@ Legacy ids (`subscription-bridge-gemini-fast`, `subscription-bridge-gemini-think
 are still accepted as aliases and resolve to `gemini-flash` and `gemini-pro`.
 
 When OpenCode compacts a session (the re-sent history shrinks), SubscriptionBridge
-detects the rewrite and restarts the browser chat with the full post-compaction
-transcript, so browser context stays consistent with OpenCode's compacted view.
-The system prompt is **not** re-sent in full: the browser receives a short reminder
-(a bounded slice of the operating rules plus the tool contract) so the summary turn
-does not re-inject the entire initial prompt into an already compacted context.
+detects the rewrite and restarts the browser chat, re-sending the **full**
+post-compaction system prompt and transcript: the fresh chat has never seen
+either, so the original first-message contract (context overview + operating
+instructions) must arrive again in full rather than as a bounded reminder.
+
+When the client switches models or providers mid-session (same session, new
+model), the bridge first asks the outgoing provider's browser chat to summarize
+the session using OpenCode's own compaction template (Objective, Requirements,
+Decisions, Work State, Next Move, Relevant Files, Important Context), explicitly
+excluding first-message system-prompt rules — the incoming provider receives the
+current first message separately. The new provider then starts a fresh browser
+chat with the full system prompt, that summary, and only the messages the new
+model has not seen yet; later turns continue as deltas. If the outgoing chat
+cannot produce a summary, a bounded excerpt of the covered history is sent
+instead.
 
 On the first turn of a conversation the system prompt is delivered as two labelled
 sections when a boundary exists between them: `<context_overview>` (identity, env,

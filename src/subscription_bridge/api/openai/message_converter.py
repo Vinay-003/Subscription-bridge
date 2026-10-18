@@ -198,6 +198,131 @@ def delta_reference_note(has_tools: bool) -> str:
     return "\n\n" + "\n\n".join(paragraphs)
 
 
+# The template, rules, and structure mirror OpenCode's own session compaction
+# prompt (packages/core/src/session/compaction.ts) so a handoff summary reads
+# the same to the browser model as OpenCode's in-client summaries do.
+_SWITCH_COMPACTION_TEMPLATE = """You MUST use this format for your response (you may omit sections
+that aren't applicable). Do not include the <template> tags in your response.
+<template>
+## Objective
+- [one or two brief sentences describing what the user is trying to accomplish]
+
+## Requirements
+- [constraints, preferences, requirements, and scope boundaries stated by the user, or "(none)"]
+
+## Decisions
+- [decisions already made and why, or "(none)"]
+
+## Work State
+Break the objective into smaller goals and report which are completed, which are being worked on, and which are blocked.
+### Completed
+- [goals that have been completed; otherwise "(none)"]
+
+### Active
+- [goals currently being worked on; otherwise "(none)"]
+
+### Blocked
+- [anything blocking progress, and why; otherwise "(none)"]
+
+## Next Move
+1. [ordered list of next actions, or "(none)"]
+
+## Relevant Files
+List the files and directories, other than the current working directory, that another agent
+would need to open to continue this work. Include at most 15, most important first. Do not list
+every file that was read or changed. Include paths outside the current working directory when
+relevant. If none, write "(none)".
+- `[file or directory path]`: [brief reason it matters]
+
+## Important Context
+- [facts the next agent cannot continue without and cannot easily find on its own; or "(none)"]
+</template>"""
+
+_SWITCH_COMPACTION_RULES = """Rules:
+- Keep each section concise. Use terse, single-line bullets, not prose paragraphs or nested lists.
+- Prefer short references over detailed restatement. It is fine to leave out information the
+  next agent can recover from the code or the files listed above.
+- Preserve exact file paths, symbols, commands, error strings, URLs, and identifiers.
+- Carry forward only user questions or requests that remain unanswered or require further action.
+  Do not repeat ones that newer history has answered or resolved. Preserve exact wording when
+  carrying one forward.
+- Preserve consequential workflow state, including whether changes are uncommitted, committed,
+  pushed, under review, or merged.
+- Do not mention the summary process or that context was compacted."""
+
+_SWITCH_COMPACTION_EXCLUSION = (
+    "Summarize only what the user and the assistant said and did. Leave out "
+    "instructions and setup the assistant was given rather than told by the "
+    "user: repository conventions, instruction files such as AGENTS.md, "
+    "environment details like the session ID, and every rule, policy, or "
+    "instruction that arrived in the first message of this conversation (its "
+    "system prompt). The next agent receives current versions of all of these "
+    "separately in its own first message, so do not mention, restate, or carry "
+    "forward any of them."
+)
+
+
+def build_switch_compaction_prompt() -> str:
+    """Prompt asking the outgoing browser chat to summarize the session.
+
+    Used when the client switches models/providers mid-session: the old
+    provider still holds the full conversation, so it produces the handoff
+    summary that the new provider receives as its first post-system message.
+    Mirrors OpenCode's compaction instructions (Objective/Requirements/
+    Decisions/Work State/Next Move/Relevant Files/Important Context) plus an
+    explicit ban on carrying first-message system-prompt rules forward.
+    """
+    return "\n\n".join(
+        [
+            "You MUST summarize the conversation above into a structured summary "
+            "that will be given to another agent to resume the work.",
+            _SWITCH_COMPACTION_EXCLUSION,
+            _SWITCH_COMPACTION_TEMPLATE,
+            _SWITCH_COMPACTION_RULES,
+            "Do not continue the task or call tools.",
+            "Return only the structured summary in the requested format. Do not "
+            "include a preamble, explanation, or other commentary.",
+        ]
+    )
+
+
+LOCAL_HISTORY_EXCERPT_CHARS = 12000
+
+
+def local_history_excerpt(
+    messages: list[Any], limit_chars: int = LOCAL_HISTORY_EXCERPT_CHARS
+) -> str:
+    """Render a bounded transcript used when the old provider cannot summarize.
+
+    Fallback for a provider-switch handoff where the outgoing browser chat is
+    unreachable or refuses to compact: keep only the most recent part of the
+    covered history instead of re-sending everything to the new provider.
+    """
+    parts: list[str] = []
+    for msg in messages:
+        role = str(getattr(msg, "role", "") or "")
+        if role == "system":
+            continue
+        content = getattr(msg, "content", None)
+        text = extract_text(content) if isinstance(content, (str, list)) else ""
+        if not text.strip():
+            continue
+        label = {"user": "User", "assistant": "Assistant", "tool": "Tool result"}.get(
+            role, role or "Message"
+        )
+        parts.append(f"{label}: {text}")
+    if not parts:
+        return ""
+    transcript = "\n".join(parts)
+    if len(transcript) <= limit_chars:
+        return f"Previous conversation:\n\n{transcript}"
+    tail = transcript[-limit_chars:]
+    cut = tail.find("\n")
+    if 0 <= cut < 400:
+        tail = tail[cut + 1 :]
+    return f"Previous conversation (truncated to the most recent part):\n\n{tail}"
+
+
 def _midpoint_split(text: str) -> tuple[str, str]:
     midpoint = len(text) // 2
     cut = text.rfind("\n\n", 0, midpoint)

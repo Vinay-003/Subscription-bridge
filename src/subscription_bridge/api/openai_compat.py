@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import time
 import uuid
 from collections.abc import AsyncGenerator
+from dataclasses import dataclass, field
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -12,12 +14,13 @@ from starlette.responses import JSONResponse, StreamingResponse
 
 from subscription_bridge.api.dependencies import AppDependencies
 from subscription_bridge.api.openai.message_converter import (
+    build_switch_compaction_prompt,
     cleanup_temp_files,
-    compact_system_prompt,
     convert_messages,
     delta_reference_note,
     extract_images_from_content,
     extract_text,
+    local_history_excerpt,
     render_system_prompt,
     save_image,
 )
@@ -32,8 +35,14 @@ from subscription_bridge.api.openai.model_catalog import (
 from subscription_bridge.api.openai.model_router import (
     provider_metadata,
     resolve_adapter,
+    route_for_model,
 )
-from subscription_bridge.api.openai.streaming import error_stream, stream_agent_answer, stream_response
+from subscription_bridge.api.openai.streaming import (
+    KEEPALIVE_INTERVAL_SECONDS,
+    error_stream,
+    stream_agent_answer,
+    stream_response,
+)
 from subscription_bridge.api.openai.tool_parser import parse_tool_calls
 from subscription_bridge.api.openai_models import (
     ChatCompletionRequest,
@@ -54,6 +63,50 @@ router = APIRouter()
 # OpenCode sends the FULL history every turn. The browser chat already has prior
 # turns, so we only forward the NEW messages (delta) to avoid double context.
 _conversation_delta: dict[str, int] = {}
+
+# Client-supplied session keys, including x-session-affinity (OpenCode's header
+# for non-"opencode" providers such as this bridge).
+_SESSION_HEADERS = (
+    "x-opencode-session",
+    "x-opencode-session-id",
+    "x-session-id",
+    "x-session-affinity",
+)
+
+# Per-SESSION model state, kept separate from _conversation_delta: it must
+# survive model switches (the conversation id may be model-folded, and the
+# delta count must not double as switch state). session_key -> last request's
+# {model, conv, count}.
+_session_state: dict[str, dict[str, Any]] = {}
+
+
+def _session_identity(messages: list[Any], request: Request | None = None) -> str:
+    """Return a model-independent key for one client session.
+
+    Used to detect mid-session model/provider switches: the same identity must
+    hold before and after the model changes, so it must not fold the model id
+    in. Prefer the client's session header (OpenCode sends one on every
+    request); otherwise digest the system prompt and first user message alone.
+    """
+    if request is not None:
+        for header in _SESSION_HEADERS:
+            supplied = request.headers.get(header, "").strip()
+            if supplied:
+                digest = hashlib.sha256(supplied.encode("utf-8")).hexdigest()[:24]
+                return f"sess-{digest}"
+    system_text: list[str] = []
+    first_user = ""
+    for message in messages:
+        role = getattr(message, "role", "")
+        content = getattr(message, "content", None)
+        text = extract_text(content) if isinstance(content, (str, list)) else ""
+        if role == "system":
+            system_text.append(text)
+        elif role == "user" and text.strip() and not first_user:
+            first_user = text
+    identity = "\0".join([*system_text, first_user])
+    digest = hashlib.sha256(identity.encode("utf-8", errors="replace")).hexdigest()[:24]
+    return f"sess-{digest}"
 
 
 def _delta_messages(messages: list[Any], conversation_id: str) -> tuple[list[Any], bool]:
@@ -198,7 +251,7 @@ def _conversation_id(
     the conversation instead of appending to the previous model's transcript.
     """
     if request is not None:
-        for header in ("x-opencode-session", "x-opencode-session-id", "x-session-id"):
+        for header in _SESSION_HEADERS:
             supplied = request.headers.get(header, "").strip()
             if supplied:
                 digest = hashlib.sha256(supplied.encode("utf-8")).hexdigest()[:24]
@@ -254,6 +307,89 @@ def _title_from_messages(messages: list[Any]) -> str:
 
 async def _resolve_adapter(model_id: str, deps: AppDependencies) -> Any | None:
     return await resolve_adapter(model_id, deps)
+
+
+_COMPACTION_TIMEOUT_SECONDS = 240.0
+
+
+@dataclass
+class _SwitchPlan:
+    """State for handing a live session from one model/provider to another."""
+
+    session_key: str
+    previous_model: str
+    previous_conv: str
+    covered_count: int
+    tail_msgs: list[Any] = field(default_factory=list)
+    tail_prompt: str = ""
+    fallback_excerpt: str = ""
+    summary: str = ""
+    compaction_task: asyncio.Task[str] | None = None
+
+
+async def _run_switch_compaction(adapter: Any, run_id: str) -> str:
+    """Ask the outgoing browser chat to summarize its session for handoff.
+
+    Runs against the PREVIOUS model's adapter and conversation so the summary
+    is produced where the full transcript still lives. The prompt forbids
+    carrying first-message system-prompt rules forward: the incoming provider
+    receives the current first message separately.
+    """
+    compaction_req = ProviderRequest(
+        run_id=run_id,
+        prompt=build_switch_compaction_prompt(),
+        require_json=False,
+        timeout_seconds=120,
+        metadata={"isolated_conversation": True, "compaction_request": True},
+    )
+    response = await adapter.send_prompt(compaction_req)
+    if not response.success:
+        raise RuntimeError(response.error or "compaction request failed")
+    text = (response.text or "").strip()
+    if len(text) < 40:
+        raise RuntimeError("compaction summary too short")
+    return text
+
+
+async def _await_switch_summary(plan: _SwitchPlan, log: Any) -> None:
+    """Await compaction for a non-streaming request; set plan.summary or fall back."""
+    task = plan.compaction_task
+    if task is None:
+        log.warning(
+            "switch_compaction_skipped",
+            session=plan.session_key,
+            previous_model=plan.previous_model,
+            reason="old_adapter_unavailable",
+        )
+        return
+    try:
+        plan.summary = await asyncio.wait_for(task, _COMPACTION_TIMEOUT_SECONDS)
+        log.info(
+            "switch_compaction_ready",
+            session=plan.session_key,
+            previous_model=plan.previous_model,
+            summary_chars=len(plan.summary),
+        )
+    except TimeoutError:
+        log.warning(
+            "switch_compaction_timeout",
+            session=plan.session_key,
+            budget_seconds=_COMPACTION_TIMEOUT_SECONDS,
+        )
+    except Exception as e:
+        log.warning("switch_compaction_failed", session=plan.session_key, error=str(e))
+
+
+def _apply_switch_prompt(plan: _SwitchPlan, provider_req: ProviderRequest) -> None:
+    """Fill the outgoing request with summary + uncovered tail for the new model."""
+    summary = plan.summary or plan.fallback_excerpt
+    if plan.tail_prompt:
+        body = f"{summary}\n\n{plan.tail_prompt}" if summary else plan.tail_prompt
+    else:
+        body = summary
+    provider_req.prompt = body
+    if isinstance(provider_req.metadata, dict):
+        provider_req.metadata["full_prompt"] = body
 
 
 @router.get("/models")
@@ -338,6 +474,50 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
 
     has_tools = bool(req.tools) and req.tool_choice != "none"
     conversation_id = _conversation_id(req.messages, request, model=req.model)
+
+    # Mid-session model/provider switch: same session, different model. The old
+    # provider still holds the conversation, so it compacts it for handoff and
+    # the new provider starts a fresh browser chat with system prompt + summary
+    # + the messages it has not seen yet.
+    session_key = _session_identity(req.messages, request)
+    prev_state = _session_state.get(session_key)
+    switch_plan: _SwitchPlan | None = None
+    if prev_state is not None and prev_state.get("model") != req.model:
+        covered = int(prev_state.get("count", 0))
+        switch_plan = _SwitchPlan(
+            session_key=session_key,
+            previous_model=str(prev_state.get("model", "")),
+            previous_conv=str(prev_state.get("conv", conversation_id)),
+            covered_count=covered,
+            tail_msgs=req.messages[covered:],
+        )
+        log.info(
+            "provider_switch_detected",
+            session=session_key,
+            previous_model=switch_plan.previous_model,
+            new_model=req.model,
+            covered_count=covered,
+            msg_count=len(req.messages),
+        )
+        old_adapter: Any | None = None
+        try:
+            old_adapter = await _resolve_adapter(switch_plan.previous_model, deps)
+        except Exception as e:
+            log.warning(
+                "switch_old_adapter_unavailable",
+                previous_model=switch_plan.previous_model,
+                error=str(e),
+            )
+        if old_adapter is not None:
+            switch_plan.compaction_task = asyncio.create_task(
+                _run_switch_compaction(old_adapter, switch_plan.previous_conv)
+            )
+    _session_state[session_key] = {
+        "model": req.model,
+        "conv": conversation_id,
+        "count": len(req.messages),
+    }
+
     # Only forward NEW messages to the browser. The browser chat already has
     # prior turns; re-sending full history causes double context bloat.
     delta_msgs, history_rewritten = _delta_messages(req.messages, conversation_id)
@@ -355,16 +535,24 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
         tool_choice=req.tool_choice,
         require_json_tools=has_tools,
     )
-    # System prompt is only needed on the first turn; the browser chat
-    # persists it. On delta turns the adapter skips system_prompt anyway, so
-    # the first-turn reminder is appended to the delta text instead.
-    # The first turn is delivered as two labelled sections so the browser model
-    # separates background context from the operating contract. After compaction
-    # the original prompt must not be re-sent in full: only a bounded reminder.
-    if history_rewritten:
-        system_prompt = compact_system_prompt(full_system_prompt)
-    elif is_first_request:
-        system_prompt = render_system_prompt(system_prompt)
+    if switch_plan is not None:
+        switch_plan.tail_prompt, _ = _convert_messages(
+            switch_plan.tail_msgs, req.tools if has_tools else None,
+            tool_choice=req.tool_choice,
+            require_json_tools=has_tools,
+        )
+        switch_plan.fallback_excerpt = local_history_excerpt(
+            req.messages[: switch_plan.covered_count]
+        )
+    # System prompt is only delivered on turns that open a fresh browser chat:
+    # the first turn, an OpenCode history rewrite, or a provider switch. The
+    # first turn is delivered as two labelled sections so the browser model
+    # separates background context from the operating contract; rewrites and
+    # switches re-send the same full rendering because the fresh chat has none
+    # of it. On delta turns the adapter skips system_prompt anyway, so the
+    # first-turn reminder is appended to the delta text instead.
+    if switch_plan is not None or history_rewritten or is_first_request:
+        system_prompt = render_system_prompt(full_system_prompt)
     else:
         system_prompt = ""
         if prompt.strip():
@@ -373,8 +561,9 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
     workspace_resolution = resolve_workspace(req, request)
     log.info("workspace_resolved", workspace=workspace_resolution.path, source=workspace_resolution.source)
 
+    source_msgs = switch_plan.tail_msgs if switch_plan is not None else delta_msgs
     attachments: list[str] = []
-    for msg in delta_msgs:
+    for msg in source_msgs:
         if isinstance(msg.content, list):
             attachments.extend(_extract_images_from_content(msg.content))
 
@@ -384,6 +573,17 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
         "full_prompt": full_prompt,
         "model_id": req.model,
     }
+    if switch_plan is not None:
+        provider_metadata_dict["restart_conversation"] = True
+        route = route_for_model(req.model)
+        log.info(
+            "provider_switch_handoff",
+            session=session_key,
+            previous_model=switch_plan.previous_model,
+            new_model=req.model,
+            new_provider=route.provider if route is not None else None,
+            tail_msgs=len(switch_plan.tail_msgs),
+        )
     if history_rewritten:
         provider_metadata_dict["restart_conversation"] = True
         log.info("history_rewritten_restart", conversation_id=conversation_id, msg_count=len(req.messages))
@@ -400,6 +600,10 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
         timeout_seconds=max((req.max_completion_tokens or req.max_tokens or 1024) // 100, 30),
         metadata=provider_metadata_dict,
     )
+    if switch_plan is not None:
+        # Prompt is replaced with summary + tail once compaction resolves
+        # (before send, or inside the stream generator before the first chunk).
+        provider_req.prompt = ""
 
     if req.stream:
         return StreamingResponse(
@@ -408,6 +612,7 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
                 tools=req.tools if has_tools else None, tool_choice=req.tool_choice,
                 include_usage=bool((req.stream_options or {}).get("include_usage")),
                 parallel_tool_calls=req.parallel_tool_calls,
+                switch_plan=switch_plan,
             ),
             media_type="text/event-stream",
             headers={
@@ -416,6 +621,10 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
                 "X-Accel-Buffering": "no",
             },
         )
+
+    if switch_plan is not None:
+        await _await_switch_summary(switch_plan, log)
+        _apply_switch_prompt(switch_plan, provider_req)
 
     # OpenAI compatibility mode is a model gateway. It may return tool_calls,
     # but it never executes local tools; clients such as OpenCode own execution.
@@ -448,9 +657,9 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
                 )
             ],
             usage=Usage(
-                prompt_tokens=_estimate_tokens(prompt),
+                prompt_tokens=_estimate_tokens(provider_req.prompt or prompt),
                 completion_tokens=_estimate_tokens(response.text),
-                total_tokens=_estimate_tokens(prompt) + _estimate_tokens(response.text),
+                total_tokens=_estimate_tokens(provider_req.prompt or prompt) + _estimate_tokens(response.text),
             ),
         )
 
@@ -464,9 +673,9 @@ async def chat_completions(request: Request, body: dict[str, Any]) -> Any:
             )
         ],
         usage=Usage(
-            prompt_tokens=_estimate_tokens(prompt),
+            prompt_tokens=_estimate_tokens(provider_req.prompt or prompt),
             completion_tokens=_estimate_tokens(response.text),
-            total_tokens=_estimate_tokens(prompt) + _estimate_tokens(response.text),
+            total_tokens=_estimate_tokens(provider_req.prompt or prompt) + _estimate_tokens(response.text),
         ),
     )
 
@@ -510,8 +719,52 @@ async def _stream_response(
     tool_choice: str | dict[str, Any] | None = None,
     include_usage: bool = False,
     parallel_tool_calls: bool | None = None,
+    switch_plan: _SwitchPlan | None = None,
 ) -> AsyncGenerator[str, None]:
     try:
+        if switch_plan is not None:
+            # Compaction runs while the stream is open; SSE comments keep the
+            # connection alive until the summary is ready, then the prompt is
+            # filled in with summary + tail before the provider call starts.
+            import structlog
+            log = structlog.get_logger("bridge.api")
+            task = switch_plan.compaction_task
+            if task is None:
+                log.warning(
+                    "switch_compaction_skipped",
+                    session=switch_plan.session_key,
+                    previous_model=switch_plan.previous_model,
+                    reason="old_adapter_unavailable",
+                )
+            else:
+                deadline = time.monotonic() + _COMPACTION_TIMEOUT_SECONDS
+                while not task.done() and time.monotonic() < deadline:
+                    remaining = max(deadline - time.monotonic(), 0.1)
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.shield(task),
+                            timeout=min(KEEPALIVE_INTERVAL_SECONDS, remaining),
+                        )
+                    except TimeoutError:
+                        yield ": keepalive\n\n"
+                if task.done() and not task.cancelled():
+                    error = task.exception()
+                    if error is None:
+                        switch_plan.summary = str(task.result() or "")
+                    else:
+                        log.warning(
+                            "switch_compaction_failed",
+                            session=switch_plan.session_key,
+                            error=str(error),
+                        )
+                else:
+                    task.cancel()
+                    log.warning(
+                        "switch_compaction_timeout",
+                        session=switch_plan.session_key,
+                        budget_seconds=_COMPACTION_TIMEOUT_SECONDS,
+                    )
+            _apply_switch_prompt(switch_plan, request)
         async for chunk in stream_response(
             adapter, request, model, has_tools=has_tools,
             tools=tools, tool_choice=tool_choice, include_usage=include_usage,
@@ -519,6 +772,12 @@ async def _stream_response(
         ):
             yield chunk
     finally:
+        if (
+            switch_plan is not None
+            and switch_plan.compaction_task is not None
+            and not switch_plan.compaction_task.done()
+        ):
+            switch_plan.compaction_task.cancel()
         cleanup_temp_files(request.attachments or [])
 
 

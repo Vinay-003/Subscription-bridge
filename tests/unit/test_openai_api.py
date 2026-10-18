@@ -13,6 +13,15 @@ def client() -> TestClient:
     return TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_api_state() -> None:
+    """Clear module-level conversation/session state so tests cannot bleed."""
+    from subscription_bridge.api import openai_compat as oc
+
+    oc._conversation_delta.clear()
+    oc._session_state.clear()
+
+
 def test_v1_models(client: TestClient) -> None:
     response = client.get("/v1/models")
     assert response.status_code == 200
@@ -367,7 +376,7 @@ def test_chat_completions_renders_split_system_prompt_on_first_turn(
     assert captured[-1].system_prompt is None
 
 
-def test_chat_completions_sends_bounded_reminder_after_compaction(
+def test_chat_completions_resends_full_system_prompt_after_compaction(
     client: TestClient, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured = _capture_adapter(monkeypatch)
@@ -403,12 +412,250 @@ def test_chat_completions_sends_bounded_reminder_after_compaction(
         headers=headers,
     )
     assert r.status_code == 200
-    reminder = captured[-1].system_prompt
+    # A rewrite opens a fresh browser chat that has never seen the contract, so
+    # the same full rendering is re-sent instead of a bounded reminder.
+    resent = captured[-1].system_prompt
     assert captured[-1].metadata["restart_conversation"] is True
-    assert reminder.startswith("Earlier conversation turns were compacted")
-    assert len(reminder) < len(full_first_turn) // 2
-    assert "skill-0" not in reminder
-    assert "You have access to tools." in reminder
+    assert resent == full_first_turn
+    assert "skill-0" in resent
+    assert "You have access to tools." in resent
+    assert captured[-1].prompt == "User: summary of the compacted conversation"
+
+
+def _switch_summary_text() -> str:
+    return (
+        "## Objective\n- continue the switch handoff test\n"
+        "## Requirements\n- (none)\n"
+        "## Decisions\n- (none)\n"
+        "## Work State\n"
+        "### Completed\n- first exchange done\n"
+        "### Active\n- (none)\n"
+        "### Blocked\n- (none)\n"
+        "## Next Move\n1. answer the follow-up on the new model\n"
+        "## Relevant Files\n- (none)\n"
+        "## Important Context\n- (none)"
+    )
+
+
+def _switch_capture_adapter(monkeypatch: pytest.MonkeyPatch) -> list[object]:
+    from subscription_bridge.api import openai_compat as oc
+    from subscription_bridge.providers.base import ProviderResponse
+
+    captured: list[object] = []
+
+    class CaptureAdapter:
+        name = "fake"
+
+        async def send_prompt(self, request: object) -> ProviderResponse:
+            captured.append(request)
+            if "summarize the conversation above" in str(request.prompt):
+                summary = _switch_summary_text()
+                return ProviderResponse(
+                    provider="fake", text=summary, raw_text=summary,
+                    success=True, latency_seconds=0.0,
+                )
+            return ProviderResponse(
+                provider="fake", text="ok", raw_text="ok", success=True, latency_seconds=0.0,
+            )
+
+    async def fake_resolve(model_id: str, deps: object) -> CaptureAdapter:
+        return CaptureAdapter()
+
+    monkeypatch.setattr(oc, "resolve_adapter", fake_resolve)
+    return captured
+
+
+def test_chat_completions_provider_switch_compacts_and_restarts(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = _switch_capture_adapter(monkeypatch)
+    system = "You are a coder."
+    headers = {"x-session-affinity": "sess-switch-flow"}
+
+    r1 = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "subscription-bridge-fake",
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": "first question"},
+            ],
+        },
+        headers=headers,
+    )
+    assert r1.status_code == 200
+    assert captured[-1].metadata.get("restart_conversation") is None
+
+    r2 = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "subscription-bridge-gemini-flash-lite",
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": "first question"},
+                {"role": "assistant", "content": "first answer"},
+                {"role": "user", "content": "second question"},
+            ],
+        },
+        headers=headers,
+    )
+    assert r2.status_code == 200
+    assert len(captured) == 3
+
+    compaction = captured[1]
+    assert "summarize the conversation above" in compaction.prompt
+    assert "## Objective" in compaction.prompt
+    assert "## Next Move" in compaction.prompt
+    assert "first message of this conversation (its system prompt)" in compaction.prompt
+    assert "Do not continue the task or call tools." in compaction.prompt
+    assert compaction.metadata["compaction_request"] is True
+    assert compaction.run_id == captured[0].run_id
+
+    handoff = captured[2]
+    assert handoff.metadata["restart_conversation"] is True
+    assert handoff.metadata["model_id"] == "subscription-bridge-gemini-flash-lite"
+    assert handoff.system_prompt is not None
+    assert "You are a coder." in handoff.system_prompt
+    assert handoff.prompt.startswith("## Objective")
+    assert "first exchange done" in handoff.prompt
+    assert "User: second question" in handoff.prompt
+    assert "first question" not in handoff.prompt
+    assert handoff.metadata["full_prompt"] == handoff.prompt
+    # Tiny system prompts have no context/contract split, so they render raw.
+
+
+def test_chat_completions_provider_switch_streams_compaction_first(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = _switch_capture_adapter(monkeypatch)
+    headers = {"x-session-affinity": "sess-switch-stream"}
+
+    client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "subscription-bridge-fake",
+            "messages": [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "one"},
+            ],
+        },
+        headers=headers,
+    )
+    r2 = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "subscription-bridge-gemini-flash-lite",
+            "messages": [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "one"},
+                {"role": "assistant", "content": "two"},
+                {"role": "user", "content": "three"},
+            ],
+            "stream": True,
+        },
+        headers=headers,
+    )
+    assert r2.status_code == 200
+    assert "data:" in r2.text
+    assert len(captured) == 3
+    assert "summarize the conversation above" in captured[1].prompt
+    handoff = captured[2]
+    assert handoff.prompt.startswith("## Objective")
+    assert "User: three" in handoff.prompt
+    assert handoff.metadata["restart_conversation"] is True
+
+
+def test_chat_completions_switch_falls_back_when_compaction_fails(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from subscription_bridge.api import openai_compat as oc
+    from subscription_bridge.providers.base import ProviderResponse
+
+    captured: list[object] = []
+
+    class FailCompactionAdapter:
+        name = "fake"
+
+        async def send_prompt(self, request: object) -> ProviderResponse:
+            captured.append(request)
+            if "summarize the conversation above" in str(request.prompt):
+                return ProviderResponse(
+                    provider="fake", text="", raw_text="", success=False,
+                    error="browser dead", latency_seconds=0.0,
+                )
+            return ProviderResponse(
+                provider="fake", text="ok", raw_text="ok", success=True, latency_seconds=0.0,
+            )
+
+    async def fake_resolve(model_id: str, deps: object) -> FailCompactionAdapter:
+        return FailCompactionAdapter()
+
+    monkeypatch.setattr(oc, "resolve_adapter", fake_resolve)
+    headers = {"x-session-affinity": "sess-switch-fallback"}
+
+    client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "subscription-bridge-fake",
+            "messages": [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "cover me"},
+            ],
+        },
+        headers=headers,
+    )
+    r2 = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "subscription-bridge-gemini-flash-lite",
+            "messages": [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "cover me"},
+                {"role": "assistant", "content": "covered"},
+                {"role": "user", "content": "now what"},
+            ],
+        },
+        headers=headers,
+    )
+    assert r2.status_code == 200
+    handoff = captured[-1]
+    assert handoff.metadata["restart_conversation"] is True
+    assert handoff.prompt == (
+        "Previous conversation:\n\n"
+        "User: cover me\n\n"
+        "Assistant: covered\nUser: now what"
+    )
+    assert handoff.metadata["full_prompt"] == handoff.prompt
+
+
+def test_chat_completions_same_session_same_model_does_not_compact(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = _switch_capture_adapter(monkeypatch)
+    headers = {"x-session-affinity": "sess-no-switch"}
+
+    for body in (
+        [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "one"},
+        ],
+        [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "one"},
+            {"role": "assistant", "content": "two"},
+            {"role": "user", "content": "three"},
+        ],
+    ):
+        r = client.post(
+            "/v1/chat/completions",
+            json={"model": "subscription-bridge-fake", "messages": body},
+            headers=headers,
+        )
+        assert r.status_code == 200
+    assert len(captured) == 2
+    assert all(
+        "summarize the conversation above" not in str(req.prompt) for req in captured
+    )
 
 
 def test_chat_completions_appends_reference_note_on_delta_turns(
@@ -985,3 +1232,47 @@ def test_openai_gateway_tool_loop_preserves_session_and_returns_to_opencode(
     assert seen[0].metadata["isolated_conversation"] is True
     assert "README contents" in seen[1].prompt
     assert "Inspect README.md" not in seen[1].prompt  # delta: only new messages are sent
+
+
+def test_session_identity_prefers_header_and_ignores_history_changes() -> None:
+    from types import SimpleNamespace
+
+    from subscription_bridge.api.openai_compat import _session_identity
+
+    req = SimpleNamespace(headers={"x-session-affinity": "affinity-1"})
+    first = _session_identity(
+        [SimpleNamespace(role="user", content="one")], req,
+    )
+    later = _session_identity(
+        [
+            SimpleNamespace(role="system", content="rules"),
+            SimpleNamespace(role="user", content="one"),
+            SimpleNamespace(role="assistant", content="two"),
+            SimpleNamespace(role="user", content="three"),
+        ],
+        req,
+    )
+    assert first == later
+    assert first.startswith("sess-")
+
+
+def test_session_identity_fallback_digests_system_and_first_user() -> None:
+    from types import SimpleNamespace
+
+    from subscription_bridge.api.openai_compat import _session_identity
+
+    base = [
+        SimpleNamespace(role="system", content="rules"),
+        SimpleNamespace(role="user", content="first"),
+    ]
+    extended = base + [
+        SimpleNamespace(role="assistant", content="reply"),
+        SimpleNamespace(role="user", content="next"),
+    ]
+    assert _session_identity(base, None) == _session_identity(extended, None)
+    other = [
+        SimpleNamespace(role="system", content="rules"),
+        SimpleNamespace(role="user", content="different first"),
+    ]
+    assert _session_identity(base, None) != _session_identity(other, None)
+    assert _session_identity(base, None).startswith("sess-")

@@ -124,3 +124,68 @@ def test_delta_reference_note_without_tools_omits_tool_contract() -> None:
     assert note.startswith("\n\n[Reminder")
     assert "tool_calls" not in note
     assert SYSTEM_CONTRACT_TAG in note
+
+
+def test_switch_compaction_prompt_has_template_and_first_message_exclusion() -> None:
+    from subscription_bridge.api.openai.message_converter import (
+        build_switch_compaction_prompt,
+    )
+
+    prompt = build_switch_compaction_prompt()
+    for section in (
+        "## Objective",
+        "## Requirements",
+        "## Decisions",
+        "### Completed",
+        "### Active",
+        "### Blocked",
+        "## Next Move",
+        "## Relevant Files",
+        "## Important Context",
+    ):
+        assert section in prompt
+    assert "summarize the conversation above" in prompt
+    assert "Summarize only what the user and the assistant said and did." in prompt
+    assert "first message of this conversation (its system prompt)" in prompt
+    assert "do not mention, restate, or carry forward any of them" in prompt
+    assert "Do not continue the task or call tools." in prompt
+    assert "Do not mention the summary process" in prompt
+
+
+def test_local_history_excerpt_keeps_recent_tail_and_roles() -> None:
+    from types import SimpleNamespace
+
+    from subscription_bridge.api.openai.message_converter import local_history_excerpt
+
+    messages = [
+        SimpleNamespace(role="system", content="secret system rules"),
+        SimpleNamespace(role="user", content="cover me"),
+        SimpleNamespace(role="assistant", content="covered"),
+    ]
+    excerpt = local_history_excerpt(messages)
+    assert excerpt.startswith("Previous conversation:")
+    assert "User: cover me" in excerpt
+    assert "Assistant: covered" in excerpt
+    assert "secret system rules" not in excerpt
+
+
+def test_local_history_excerpt_truncates_long_history() -> None:
+    from types import SimpleNamespace
+
+    from subscription_bridge.api.openai.message_converter import local_history_excerpt
+
+    messages = [
+        SimpleNamespace(role="user", content=f"turn {i} " + ("x" * 800))
+        for i in range(60)
+    ]
+    excerpt = local_history_excerpt(messages, limit_chars=2000)
+    assert excerpt.startswith("Previous conversation (truncated to the most recent part):")
+    assert len(excerpt) < 3000
+    assert "turn 59" in excerpt
+    assert "turn 0 " not in excerpt
+
+
+def test_local_history_excerpt_empty_history_is_empty() -> None:
+    from subscription_bridge.api.openai.message_converter import local_history_excerpt
+
+    assert local_history_excerpt([]) == ""
