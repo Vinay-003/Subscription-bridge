@@ -122,3 +122,29 @@ async def test_set_thinking_unknown_variant_is_off_by_default() -> None:
     assert ok is True
     assert loc.clicks == 1
     assert loc._pressed is False
+
+
+def test_composer_matches_exact_and_paste_chrome() -> None:
+    from subscription_bridge.providers.chatgpt.adapter import _composer_matches
+
+    short = "hello world"
+    assert _composer_matches(short, short)
+    assert _composer_matches(f"  {short}\n", short)
+    assert _composer_matches(f"Pasted text\n{short}", short)
+    assert _composer_matches(f"{short} Pasted text", short)
+    assert not _composer_matches("stale composer content", short)
+    assert not _composer_matches("hello", short)
+
+
+def test_composer_matches_long_pasted_text_with_label_margin() -> None:
+    from subscription_bridge.providers.chatgpt.adapter import _composer_matches
+
+    long_text = ("Pasted paragraphs of prompt text that keep going. " * 20).strip()
+    assert len(long_text) >= 200
+    assert _composer_matches(long_text, long_text)
+    assert _composer_matches(f"Pasted text\n{long_text}", long_text)
+    assert _composer_matches(f"{long_text}\nPasted text", long_text)
+    # Partial insert of only the beginning must not pass.
+    assert not _composer_matches(long_text[:120], long_text)
+    # Unrelated content must not pass.
+    assert not _composer_matches(long_text.replace("prompt", "different"), long_text)

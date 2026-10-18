@@ -112,7 +112,7 @@ class ChatGPTProviderAdapter(ProviderAdapter):
                 return ProviderResponse(
                     provider=self.name, text="", raw_text="", success=False,
                     latency_seconds=time.monotonic() - start,
-                    error="Failed to type prompt into ChatGPT composer",
+                    error="Failed to insert prompt into ChatGPT composer",
                     metadata=upload_meta or {},
                 )
 
@@ -315,17 +315,55 @@ async def _wait_for_composer_ready(page: Any) -> None:
     await _find_composer(page, timeout=30)
 
 
+_PASTE_CHROME_LABELS = ("Pasted text",)
+
+
+def _composer_matches(actual: str, text: str) -> bool:
+    """Match composer content against the intended prompt, tolerating paste chrome.
+
+    A real ChatGPT paste can add a short "Pasted text" chip inside the editor,
+    so exact equality fails for pasted prompts. Short prompts must match exactly
+    after stripping that chrome (stale composer content must not pass); long
+    prompts additionally accept whole-text containment or a prefix/suffix match
+    within a small label-only margin.
+    """
+    if not actual or not text:
+        return False
+    if actual == text or actual.strip() == text.strip():
+        return True
+    cleaned = actual
+    for label in _PASTE_CHROME_LABELS:
+        cleaned = cleaned.replace(label, " ")
+    cleaned_norm = " ".join(cleaned.split())
+    text_norm = " ".join(text.split())
+    if not text_norm:
+        return False
+    if cleaned_norm == text_norm:
+        return True
+    if len(text_norm) >= 200:
+        if text_norm in cleaned_norm:
+            return True
+        if len(cleaned_norm) >= int(len(text_norm) * 0.97):
+            return text_norm[:200] in cleaned_norm and text_norm[-200:] in cleaned_norm
+    return False
+
+
 async def _type_prompt(page: Any, text: str) -> bool:
     composer = await _find_composer(page)
     await composer.scroll_into_view_if_needed(timeout=5000)
 
-    # Method 1: JavaScript paste (fast, handles long text)
-    ok = await _paste_via_js(page, composer, text)
-    if ok:
-        await asyncio.sleep(0.3)
-        return True
+    # ChatGPT applies a typed-input length limit ("Message is too long") that
+    # does not apply to pasted content, so paste paths run first; the legacy
+    # insert and keyboard paths remain only as fallbacks.
+    methods = (_paste_via_event, _paste_via_clipboard, _paste_via_js, _type_via_keyboard)
+    for method in methods:
+        if await method(page, composer, text):
+            await asyncio.sleep(0.3)
+            return True
+    return False
 
-    # Method 2: keyboard fallback
+
+async def _type_via_keyboard(page: Any, composer: Any, text: str) -> bool:
     try:
         await composer.click(timeout=5000)
     except Exception:
@@ -337,9 +375,92 @@ async def _type_prompt(page: Any, text: str) -> bool:
     await page.keyboard.insert_text(text)
     await asyncio.sleep(0.3)
     actual = await _get_composer_text(page)
-    if actual and len(actual.strip()) > 20:
-        return True
     return bool(actual and actual.strip())
+
+
+async def _paste_via_event(page: Any, composer: Any, text: str) -> bool:
+    """Dispatch a synthetic ClipboardEvent('paste') on the composer.
+
+    ChatGPT's own paste handler, when it accepts the untrusted event, fills the
+    editor as a paste (no typed-input length validation) and may show the
+    "Pasted text" chip.
+    """
+    script = r"""
+    (text) => {
+        const targets = [
+            'div.ProseMirror[contenteditable="true"]',
+            '[data-testid="composer"] [contenteditable="true"]',
+            'main div[contenteditable="true"]',
+            '#prompt-textarea',
+            'textarea[data-testid="prompt-textarea"]',
+        ];
+        let el = null;
+        for (const sel of targets) {
+            el = document.querySelector(sel);
+            if (el) break;
+        }
+        if (!el) return false;
+        try { el.focus(); } catch (e) {}
+        document.execCommand('selectAll');
+        const dt = new DataTransfer();
+        dt.setData('text/plain', text);
+        const ev = new ClipboardEvent('paste', {
+            bubbles: true, cancelable: true, clipboardData: dt,
+        });
+        el.dispatchEvent(ev);
+        return true;
+    }
+    """
+    try:
+        dispatched = bool(await page.evaluate(script, text))
+        if not dispatched:
+            return False
+        await asyncio.sleep(0.4)
+        actual = await _get_composer_text(page)
+        return bool(actual.strip()) and _composer_matches(actual, text)
+    except Exception:
+        return False
+
+
+async def _paste_via_clipboard(page: Any, composer: Any, text: str) -> bool:
+    """Paste through the real clipboard (Ctrl+V) so ChatGPT sees a trusted event."""
+    context = getattr(page, "context", None)
+    if context is not None:
+        try:
+            await context.grant_permissions(["clipboard-read", "clipboard-write"])
+        except Exception:
+            pass
+    previous_clipboard = None
+    try:
+        try:
+            previous_clipboard = await page.evaluate("() => navigator.clipboard.readText()")
+        except Exception:
+            previous_clipboard = None
+        await page.evaluate("(t) => navigator.clipboard.writeText(t)", text)
+    except Exception:
+        return False
+    ok = False
+    try:
+        try:
+            await composer.click(timeout=5000)
+        except Exception:
+            pass
+        await asyncio.sleep(0.15)
+        await page.keyboard.press("Control+a")
+        await asyncio.sleep(0.1)
+        await page.keyboard.press("Control+v")
+        await asyncio.sleep(0.5)
+        actual = await _get_composer_text(page)
+        ok = bool(actual.strip()) and _composer_matches(actual, text)
+    except Exception:
+        ok = False
+    finally:
+        if previous_clipboard is not None:
+            try:
+                await page.evaluate("(t) => navigator.clipboard.writeText(t)", previous_clipboard)
+            except Exception:
+                pass
+    return ok
 
 
 async def _paste_via_js(page: Any, composer: Any, text: str) -> bool:
@@ -375,7 +496,7 @@ async def _paste_via_js(page: Any, composer: Any, text: str) -> bool:
             return False
         await asyncio.sleep(0.2)
         actual = await _get_composer_text(page)
-        return actual == text or actual.strip() == text.strip()
+        return _composer_matches(actual, text)
     except Exception:
         return False
 

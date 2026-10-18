@@ -253,7 +253,10 @@ async def wait_for_prompt_integrity(
 
 
 def _prompt_methods() -> list[str]:
-    return ["keyboard", "js"]
+    # Paste first: Gemini's typed-input validation rejects long prompts that a
+    # paste accepts. The integrity check falls back to keyboard when the paste
+    # path cannot populate the composer.
+    return ["js", "keyboard"]
 
 
 async def set_prompt_text(

@@ -111,3 +111,9 @@ def test_integrity_report_contains_all_keys() -> None:
     assert "suffix_ok" in report
     assert "chunks_found" in report
     assert "chunks_total" in report
+
+
+def test_prompt_methods_paste_first_then_keyboard() -> None:
+    from subscription_bridge.providers.gemini.prompt_io import _prompt_methods
+
+    assert _prompt_methods() == ["js", "keyboard"]
