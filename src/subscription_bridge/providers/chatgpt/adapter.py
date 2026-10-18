@@ -116,8 +116,17 @@ class ChatGPTProviderAdapter(ProviderAdapter):
                     metadata=upload_meta or {},
                 )
 
-            await _submit_via_enter(session.page)
-            logger.info("send_method_used", method="enter", run_id=request.run_id)
+            composer_text = await _get_composer_text(session.page)
+            chip_only = not composer_text.strip() and await _paste_chip_present(session.page)
+            if chip_only:
+                await _click_send_button(session.page)
+            else:
+                await _submit_via_enter(session.page)
+            logger.info(
+                "send_method_used",
+                method="send_button" if chip_only else "enter",
+                run_id=request.run_id,
+            )
 
             confirm_wait = send_confirm_seconds("chatgpt")
             accepted = await _wait_for_send_confirmation(
@@ -349,77 +358,126 @@ def _composer_matches(actual: str, text: str) -> bool:
 
 
 async def _type_prompt(page: Any, text: str) -> bool:
+    """Deliver the prompt with a real clipboard paste only — never type it.
+
+    ChatGPT's typed-input length limit ("Message is too long") does not apply
+    to pasted content. Long pastes can collapse into a "Pasted text" chip that
+    renders beside the editor and is invisible to editor-text reads, so
+    delivery is confirmed by either a text match or a chip found in the
+    composer form. Each attempt starts from a cleared composer so a
+    half-applied paste can never stack into a duplicate message.
+    """
     composer = await _find_composer(page)
     await composer.scroll_into_view_if_needed(timeout=5000)
 
-    # ChatGPT applies a typed-input length limit ("Message is too long") that
-    # does not apply to pasted content, so paste paths run first; the legacy
-    # insert and keyboard paths remain only as fallbacks.
-    methods = (_paste_via_event, _paste_via_clipboard, _paste_via_js, _type_via_keyboard)
-    for method in methods:
-        if await method(page, composer, text):
+    for _ in range(2):
+        if not await _clear_composer(page, composer):
+            continue
+        if await _paste_via_clipboard(page, composer, text):
             await asyncio.sleep(0.3)
             return True
     return False
 
 
-async def _type_via_keyboard(page: Any, composer: Any, text: str) -> bool:
+async def _clear_composer(page: Any, composer: Any) -> bool:
+    """Empty the composer body and drop leftover paste chips.
+
+    Returns True only when the body is empty AND no paste chip remains; a
+    chip that cannot be removed leaves the composer dirty and callers must
+    not paste into it (the paste would stack next to the old chip).
+    """
     try:
-        await composer.click(timeout=5000)
+        await composer.click(timeout=3000)
     except Exception:
         pass
-    await asyncio.sleep(0.15)
     await page.keyboard.press("Control+a")
     await page.keyboard.press("Backspace")
-    await asyncio.sleep(0.25)
-    await page.keyboard.insert_text(text)
-    await asyncio.sleep(0.3)
+    await asyncio.sleep(0.2)
+    for _ in range(4):
+        actual = await _get_composer_text(page)
+        if not actual.strip() and not await _paste_chip_present(page):
+            return True
+        if not await _remove_paste_chip(page):
+            await page.keyboard.press("Backspace")
+        await asyncio.sleep(0.3)
     actual = await _get_composer_text(page)
-    return bool(actual and actual.strip())
+    return not actual.strip() and not await _paste_chip_present(page)
 
 
-async def _paste_via_event(page: Any, composer: Any, text: str) -> bool:
-    """Dispatch a synthetic ClipboardEvent('paste') on the composer.
+async def _paste_chip_present(page: Any) -> bool:
+    """True when the composer form holds a paste chip/attachment.
 
-    ChatGPT's own paste handler, when it accepts the untrusted event, fills the
-    editor as a paste (no typed-input length validation) and may show the
-    "Pasted text" chip.
+    ChatGPT collapses large pastes into a chip rendered as a sibling of the
+    ProseMirror editor, so the chip never appears in editor-text reads.
     """
     script = r"""
-    (text) => {
-        const targets = [
-            'div.ProseMirror[contenteditable="true"]',
-            '[data-testid="composer"] [contenteditable="true"]',
-            'main div[contenteditable="true"]',
-            '#prompt-textarea',
-            'textarea[data-testid="prompt-textarea"]',
-        ];
-        let el = null;
-        for (const sel of targets) {
-            el = document.querySelector(sel);
-            if (el) break;
+    () => {
+        const sel = 'div.ProseMirror[contenteditable="true"], ' +
+            '[data-testid="composer"] [contenteditable="true"], ' +
+            '[data-testid="composer"] textarea, #prompt-textarea';
+        const el = document.querySelector(sel);
+        const root = (el && (el.closest('form') || el.closest('[data-testid="composer"]') || el.parentElement))
+            || document.querySelector('form')
+            || document.querySelector('[data-testid="composer"]');
+        if (!root) return false;
+        for (const node of root.querySelectorAll('*')) {
+            const own = Array.from(node.childNodes)
+                .filter(n => n.nodeType === 3)
+                .map(n => n.textContent).join('').trim();
+            if (own && own.length < 60 && /pasted text/i.test(own)) return true;
         }
-        if (!el) return false;
-        try { el.focus(); } catch (e) {}
-        document.execCommand('selectAll');
-        const dt = new DataTransfer();
-        dt.setData('text/plain', text);
-        const ev = new ClipboardEvent('paste', {
-            bubbles: true, cancelable: true, clipboardData: dt,
-        });
-        el.dispatchEvent(ev);
-        return true;
+        return !!root.querySelector('[data-pasting-text], [data-testid*="paste" i]');
     }
     """
     try:
-        dispatched = bool(await page.evaluate(script, text))
-        if not dispatched:
-            return False
-        await asyncio.sleep(0.4)
-        actual = await _get_composer_text(page)
-        return bool(actual.strip()) and _composer_matches(actual, text)
+        return bool(await page.evaluate(script))
     except Exception:
         return False
+
+
+async def _remove_paste_chip(page: Any) -> bool:
+    """Click the paste chip's own remove button. True when a click happened."""
+    script = r"""
+    () => {
+        const sel = 'div.ProseMirror[contenteditable="true"], ' +
+            '[data-testid="composer"] [contenteditable="true"], ' +
+            '[data-testid="composer"] textarea, #prompt-textarea';
+        const el = document.querySelector(sel);
+        const root = (el && (el.closest('form') || el.closest('[data-testid="composer"]') || el.parentElement))
+            || document.querySelector('form')
+            || document.querySelector('[data-testid="composer"]');
+        if (!root) return false;
+        let chip = null;
+        for (const node of root.querySelectorAll('*')) {
+            const own = Array.from(node.childNodes)
+                .filter(n => n.nodeType === 3)
+                .map(n => n.textContent).join('').trim();
+            if (own && own.length < 60 && /pasted text/i.test(own)) { chip = node; break; }
+        }
+        if (!chip) return false;
+        let box = chip;
+        for (let d = 0; d < 5 && box; d++) {
+            const btn = box.querySelector(
+                'button[aria-label*="Remove" i], button[aria-label*="Dismiss" i], ' +
+                'button[aria-label*="Delete" i], button[aria-label*="Clear" i]'
+            );
+            if (btn) { btn.click(); return true; }
+            box = box.parentElement;
+        }
+        return false;
+    }
+    """
+    try:
+        return bool(await page.evaluate(script))
+    except Exception:
+        return False
+
+
+def _paste_delivered(actual: str, text: str, chip_present: bool) -> bool:
+    """A paste landed when the editor matches the prompt or a chip appeared."""
+    if _composer_matches(actual, text):
+        return True
+    return chip_present
 
 
 async def _paste_via_clipboard(page: Any, composer: Any, text: str) -> bool:
@@ -451,7 +509,7 @@ async def _paste_via_clipboard(page: Any, composer: Any, text: str) -> bool:
         await page.keyboard.press("Control+v")
         await asyncio.sleep(0.5)
         actual = await _get_composer_text(page)
-        ok = bool(actual.strip()) and _composer_matches(actual, text)
+        ok = _paste_delivered(actual, text, await _paste_chip_present(page))
     except Exception:
         ok = False
     finally:
@@ -461,44 +519,6 @@ async def _paste_via_clipboard(page: Any, composer: Any, text: str) -> bool:
             except Exception:
                 pass
     return ok
-
-
-async def _paste_via_js(page: Any, composer: Any, text: str) -> bool:
-    script = r"""
-    (text) => {
-        const textareaSel = '#prompt-textarea, textarea[data-testid="prompt-textarea"], ' +
-            '[data-testid="composer"] textarea';
-        let el = document.querySelector(textareaSel);
-        if (el) {
-            const tag = (el.tagName || '').toLowerCase();
-            if (tag === 'textarea' || tag === 'input') {
-                el.value = text;
-                el.dispatchEvent(new Event('input', { bubbles: true }));
-                el.dispatchEvent(new Event('change', { bubbles: true }));
-                return true;
-            }
-        }
-        el = document.querySelector(
-            '[data-testid="composer"] [contenteditable="true"], ' +
-            'div.ProseMirror[contenteditable="true"], ' +
-            'main div[contenteditable="true"]'
-        );
-        if (!el) return false;
-        el.focus();
-        document.execCommand('selectAll');
-        document.execCommand('insertText', false, text);
-        return true;
-    }
-    """
-    try:
-        inserted = bool(await page.evaluate(script, text))
-        if not inserted:
-            return False
-        await asyncio.sleep(0.2)
-        actual = await _get_composer_text(page)
-        return _composer_matches(actual, text)
-    except Exception:
-        return False
 
 
 async def _submit_via_enter(page: Any) -> None:
@@ -539,7 +559,7 @@ async def _wait_for_send_confirmation(
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         composer_text = await _get_composer_text(page)
-        if not composer_text.strip():
+        if not composer_text.strip() and not await _paste_chip_present(page):
             return True
         report = await _submission_activity_report(page)
         if (

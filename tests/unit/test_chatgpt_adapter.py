@@ -148,3 +148,14 @@ def test_composer_matches_long_pasted_text_with_label_margin() -> None:
     assert not _composer_matches(long_text[:120], long_text)
     # Unrelated content must not pass.
     assert not _composer_matches(long_text.replace("prompt", "different"), long_text)
+
+
+def test_paste_delivered_accepts_text_match_or_chips() -> None:
+    from subscription_bridge.providers.chatgpt.adapter import _paste_delivered
+
+    text = "the full prompt body"
+    assert _paste_delivered(text, text, False)
+    assert _paste_delivered("", text, True)
+    assert _paste_delivered("stale text", text, True)
+    assert not _paste_delivered("", text, False)
+    assert not _paste_delivered("stale text", text, False)
